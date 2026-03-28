@@ -1,0 +1,17 @@
+# Development Dockerfile for Frostfire Forge Asset Server
+FROM oven/bun:canary-slim AS base
+WORKDIR /app
+
+# Install dependencies
+FROM base AS deps
+COPY package.json bun.lockb* ./
+RUN bun install --frozen-lockfile
+
+# Development stage
+FROM base AS development
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+
+EXPOSE 8000
+
+CMD ["bun", "run", "development"]
