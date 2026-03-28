@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   frostfire-assets-dev:
     build:
@@ -13,12 +11,6 @@ services:
       - ../../.env.development
     networks:
       - frostfire-network-dev
-    healthcheck:
-      test: ["CMD", "bun", "-e", "fetch('http://localhost:8000/health').then(r => process.exit(0)).catch(() => process.exit(1))"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
 
 networks:
   frostfire-network-dev:
