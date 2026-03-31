@@ -1,6 +1,6 @@
 {
   "name": "armor_body_base",
-  "imageSource": "armor_body_base.png",
+  "imageSource": "armor_body_default.png",
   "frameWidth": 64,
   "frameHeight": 64,
   "columns": 20,

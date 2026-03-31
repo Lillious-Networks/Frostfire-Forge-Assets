@@ -310,6 +310,243 @@ const routes = {
       }
     }
   },
+  "/sprite-sheet-template": {
+    GET: async (req: Request) => {
+      const url = new URL(req.url);
+      const name = url.searchParams.get("name");
+
+      if (!name) {
+        return new Response(JSON.stringify({ error: "Missing sprite sheet template name" }), {
+          status: 400,
+          headers: CORS_HEADERS
+        });
+      }
+
+      try {
+        const templates = await assetCache.get("spriteSheetTemplates") as any[];
+        if (!templates || templates.length === 0) {
+          return new Response(JSON.stringify({ error: "Sprite sheet templates not found" }), {
+            status: 404,
+            headers: CORS_HEADERS
+          });
+        }
+
+        const template = templates.find((t: any) => t.name === name);
+        if (!template) {
+          return new Response(JSON.stringify({ error: `Sprite sheet template "${name}" not found. Available: ${templates.map((t: any) => t.name).join(", ")}` }), {
+            status: 404,
+            headers: CORS_HEADERS
+          });
+        }
+
+        if (!template.template) {
+          return new Response(JSON.stringify({ error: `Sprite sheet template "${name}" has no template data` }), {
+            status: 404,
+            headers: CORS_HEADERS
+          });
+        }
+
+        // Return the cached template JSON directly
+        const templateData = typeof template.template === 'string' ? template.template : JSON.stringify(template.template);
+        return new Response(templateData, {
+          status: 200,
+          headers: { ...CORS_HEADERS, "Content-Type": "application/json" }
+        });
+      } catch (error: any) {
+        log.error(`Error serving sprite sheet template: ${error.message}`);
+        return new Response(JSON.stringify({ error: "Internal server error" }), {
+          status: 500,
+          headers: CORS_HEADERS
+        });
+      }
+    }
+  },
+  "/sprite-sheet-image": {
+    GET: async (req: Request) => {
+      const url = new URL(req.url);
+      const name = url.searchParams.get("name");
+
+      if (!name) {
+        return new Response(JSON.stringify({ error: "Missing sprite sheet image name" }), {
+          status: 400,
+          headers: CORS_HEADERS
+        });
+      }
+
+      try {
+        const templates = await assetCache.get("spriteSheetTemplates") as any[];
+        if (!templates || templates.length === 0) {
+          return new Response(JSON.stringify({ error: "Sprite sheet images not found" }), {
+            status: 404,
+            headers: CORS_HEADERS
+          });
+        }
+
+        const template = templates.find((t: any) => t.name === name);
+        if (!template) {
+          return new Response(JSON.stringify({ error: `Template "${name}" not found. Available: ${templates.map((t: any) => t.name).join(", ")}` }), {
+            status: 404,
+            headers: CORS_HEADERS
+          });
+        }
+
+        if (!template.image) {
+          return new Response(JSON.stringify({ error: `Template "${name}" has no image data` }), {
+            status: 404,
+            headers: CORS_HEADERS
+          });
+        }
+
+        // Convert Buffer to Uint8Array if needed
+        const imageData = Buffer.isBuffer(template.image) ? template.image : Buffer.from(template.image);
+
+        // Return the cached image buffer directly as PNG
+        return new Response(imageData, {
+          status: 200,
+          headers: {
+            "Content-Type": "image/png",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Content-Length": imageData.length.toString()
+          }
+        });
+      } catch (error: any) {
+        log.error(`Error serving sprite sheet image: ${error.message}`);
+        return new Response(JSON.stringify({ error: "Internal server error" }), {
+          status: 500,
+          headers: CORS_HEADERS
+        });
+      }
+    }
+  },
+  "/sprite": {
+    GET: async (req: Request) => {
+      const url = new URL(req.url);
+      const name = url.searchParams.get("name");
+
+      if (!name) {
+        return new Response(JSON.stringify({ error: "Missing sprite name" }), {
+          status: 400,
+          headers: CORS_HEADERS
+        });
+      }
+
+      try {
+        // Serve sprite PNG files directly from sprites directory
+        const spritePath = path.resolve(import.meta.dir, "assets", "sprites", `${name}.png`);
+
+        // Prevent path traversal attacks
+        const relativePath = path.relative(path.resolve(import.meta.dir, "assets", "sprites"), spritePath);
+        if (relativePath.startsWith("..")) {
+          return new Response(JSON.stringify({ error: "Invalid sprite name" }), {
+            status: 400,
+            headers: CORS_HEADERS
+          });
+        }
+
+        if (!fs.existsSync(spritePath)) {
+          return new Response(JSON.stringify({ error: "Sprite not found" }), {
+            status: 404,
+            headers: CORS_HEADERS
+          });
+        }
+
+        const spriteData = fs.readFileSync(spritePath);
+        return new Response(spriteData, {
+          status: 200,
+          headers: {
+            "Cache-Control": "public, max-age=31536000",
+            ...CORS_HEADERS
+          }
+        });
+      } catch (error: any) {
+        log.error(`Error serving sprite: ${error.message}`);
+        return new Response(JSON.stringify({ error: "Internal server error" }), {
+          status: 500,
+          headers: CORS_HEADERS
+        });
+      }
+    }
+  },
+  "/icon": {
+    GET: async (req: Request) => {
+      const url = new URL(req.url);
+      const name = url.searchParams.get("name");
+
+      if (!name) {
+        return new Response(JSON.stringify({ error: "Missing icon name" }), {
+          status: 400,
+          headers: CORS_HEADERS
+        });
+      }
+
+      try {
+        const iconPath = path.resolve(import.meta.dir, "assets", "icons", `${name}.png`);
+
+        // Prevent path traversal attacks
+        const relativePath = path.relative(path.resolve(import.meta.dir, "assets", "icons"), iconPath);
+        if (relativePath.startsWith("..")) {
+          return new Response(JSON.stringify({ error: "Invalid icon name" }), {
+            status: 400,
+            headers: CORS_HEADERS
+          });
+        }
+
+        if (!fs.existsSync(iconPath)) {
+          return new Response(JSON.stringify({ error: "Icon not found" }), {
+            status: 404,
+            headers: CORS_HEADERS
+          });
+        }
+
+        const iconData = fs.readFileSync(iconPath);
+        return new Response(iconData, {
+          status: 200,
+          headers: {
+            "Cache-Control": "public, max-age=31536000",
+            ...CORS_HEADERS
+          }
+        });
+      } catch (error: any) {
+        log.error(`Error serving icon: ${error.message}`);
+        return new Response(JSON.stringify({ error: "Internal server error" }), {
+          status: 500,
+          headers: CORS_HEADERS
+        });
+      }
+    }
+  },
+  "/sprite-sheets": {
+    GET: async (req: Request) => {
+      try {
+        const templates = await assetCache.get("spriteSheetTemplates") as any[];
+        if (!templates || templates.length === 0) {
+          return new Response(JSON.stringify({ spriteSheets: [] }), {
+            status: 200,
+            headers: CORS_HEADERS
+          });
+        }
+
+        const spriteSheets = templates.map((t: any) => ({
+          name: t.name,
+          hasTemplate: t.template !== null,
+          hasImage: t.image !== null
+        }));
+
+        return new Response(JSON.stringify({ spriteSheets }), {
+          status: 200,
+          headers: CORS_HEADERS
+        });
+      } catch (error: any) {
+        log.error(`Error listing sprite sheets: ${error.message}`);
+        return new Response(JSON.stringify({ error: "Internal server error" }), {
+          status: 500,
+          headers: CORS_HEADERS
+        });
+      }
+    }
+  },
 } as Record<string, any>;
 
 const serverPort = _https ? (parseInt(process.env.WEBSRV_PORTSSL || "") || 443) : (parseInt(process.env.WEBSRV_PORT || "") || 80);
@@ -318,13 +555,6 @@ Bun.serve({
     hostname: "0.0.0.0",
     port: serverPort,
     reusePort: false,
-    routes: {
-      "/tileset": routes["/tileset"],
-      "/map-chunk": routes["/map-chunk"],
-      "/map-checksums": routes["/map-checksums"],
-      "/update-map": routes["/update-map"],
-      "/save-map-chunks": routes["/save-map-chunks"],
-    },
   async fetch(req: Request, server: any) {
     const url = tryParseURL(req.url);
     if (!url) {
@@ -335,7 +565,8 @@ Bun.serve({
       return new Response(JSON.stringify({ message: "Invalid request" }), { status: 400 });
     }
     const ip = address.address;
-    log.debug(`Received request: ${req.method} ${req.url} from ${ip}`);
+
+    const route = routes[url.pathname as keyof typeof routes];
     // Block potentially dangerous HTTP methods
     if (req.method === "CONNECT" || req.method === "TRACE" || req.method === "TRACK" || req.method === "OPTIONS") {
       return new Response("Forbidden", { status: 403 });
@@ -347,11 +578,33 @@ Bun.serve({
       return new Response(JSON.stringify({ message: "Invalid request" }), { status: 403 });
     }
 
-    const route = routes[url.pathname as keyof typeof routes];
-
     // If route exists, handle it
     if (route) {
       return route[req.method as keyof typeof route]?.(req);
+    }
+
+    // API routes should NOT fall back to static file serving
+    const apiRoutes = ["/icon", "/sprite", "/sprite-sheet-template", "/sprite-sheet-image", "/tileset", "/map-chunk"];
+    if (apiRoutes.includes(url.pathname)) {
+      return new Response(JSON.stringify({ error: "Route not found" }), {
+        status: 404,
+        headers: CORS_HEADERS
+      });
+    }
+
+    // Try to serve as static file from assets directory
+    try {
+      const assetPath = path.join(import.meta.dir, "assets", url.pathname.replace(/^\//, ""));
+
+      if (fs.existsSync(assetPath) && fs.statSync(assetPath).isFile()) {
+        const fileContent = fs.readFileSync(assetPath);
+        return new Response(fileContent, {
+          status: 200,
+          headers: { "Content-Type": "application/octet-stream" }
+        });
+      }
+    } catch (e) {
+      log.error(`Static file error: ${e}`);
     }
 
     // Assets (map-chunk, tileset, music) should be requested via WebSocket from game server

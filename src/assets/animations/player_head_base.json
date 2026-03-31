@@ -1,6 +1,6 @@
 {
   "name": "player_head_base",
-  "imageSource": "player_head_base.png",
+  "imageSource": "player_head_default.png",
   "frameWidth": 64,
   "frameHeight": 64,
   "columns": 8,

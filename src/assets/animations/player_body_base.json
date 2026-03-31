@@ -1,6 +1,6 @@
 {
   "name": "player_body_base",
-  "imageSource": "player_body_base.png",
+  "imageSource": "player_body_default.png",
   "frameWidth": 64,
   "frameHeight": 64,
   "columns": 20,
