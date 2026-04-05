@@ -158,8 +158,8 @@ async function loadSpriteSheetTemplates() {
     const dirPath = path.dirname(pngPath);
 
     if (dirPath.includes('armor')) {
-      // Helmet and shoulderguards use armor_head_base
-      if (dirPath.includes('helmet') || dirPath.includes('shoulderguards')) {
+      // Helmet uses armor_head_base, shoulderguards use armor_body_base
+      if (dirPath.includes('helmet')) {
         const armorHeadTemplate = templates.find((t: any) => t.name === 'armor_head_base');
         templateToUse = armorHeadTemplate?.template || null;
       } else {
@@ -183,7 +183,7 @@ async function loadSpriteSheetTemplates() {
 
     let templateName = 'none';
     if (dirPath.includes('armor')) {
-      templateName = dirPath.includes('helmet') || dirPath.includes('shoulderguards') ? 'armor_head_base' : 'armor_body_base';
+      templateName = dirPath.includes('helmet') ? 'armor_head_base' : 'armor_body_base';
     } else if (dirPath.includes('mounts')) {
       templateName = 'player_mount_base';
     }
