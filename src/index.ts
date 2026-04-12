@@ -310,6 +310,155 @@ const routes = {
       }
     }
   },
+  "/save-map-properties": {
+    POST: async (req: Request) => {
+      try {
+        const body = await req.json() as { mapName: string; graveyards?: any; warps?: any; authKey: string };
+        const { mapName, graveyards, warps, authKey: requestAuthKey } = body;
+
+        if (requestAuthKey !== authKey) {
+          return new Response(JSON.stringify({ error: "Invalid authentication key" }), { status: 401, headers: CORS_HEADERS });
+        }
+
+        if (!mapName) {
+          return new Response(JSON.stringify({ error: "Invalid request: mapName is required" }), { status: 400, headers: CORS_HEADERS });
+        }
+
+        const pathModule = await import("path");
+        const fsModule = await import("fs");
+        const crypto = await import("crypto");
+        const zlibModule = await import("zlib");
+
+        const maps = (await assetCache.get("maps")) as any[] || [];
+        const mapFile = mapName.endsWith(".json") ? mapName : `${mapName}.json`;
+        const mapIndex = maps.findIndex((m: any) => m.name === mapFile);
+
+        if (mapIndex === -1) {
+          return new Response(JSON.stringify({ error: "Map not found" }), { status: 404, headers: CORS_HEADERS });
+        }
+
+        // Update map data with graveyards and warps
+        const mapData = maps[mapIndex].data;
+
+        log.info(`[AssetServer] Before update - mapData has graveyards: ${mapData.graveyards ? 'yes' : 'no'}, warps: ${mapData.warps ? 'yes' : 'no'}`);
+
+        if (graveyards) {
+          mapData.graveyards = graveyards;
+          log.info(`[AssetServer] Updated graveyards to: ${JSON.stringify(graveyards)}`);
+
+          // Also update the Tiled object layer for graveyards
+          let graveyardLayer = mapData.layers.find((l: any) => l.name === "Graveyards" && l.type === "objectgroup");
+          if (!graveyardLayer) {
+            graveyardLayer = {
+              draworder: "topdown",
+              id: Math.max(...mapData.layers.map((l: any) => l.id || 0), 0) + 1,
+              name: "Graveyards",
+              objects: [],
+              opacity: 1,
+              type: "objectgroup",
+              visible: true,
+              x: 0,
+              y: 0
+            };
+            mapData.layers.push(graveyardLayer);
+            log.info(`[AssetServer] Created Graveyards object layer`);
+          }
+
+          graveyardLayer.objects = graveyards.map((g: any, idx: number) => ({
+            id: idx + 1,
+            name: g.name,
+            type: "graveyard",
+            x: g.position?.x || 0,
+            y: g.position?.y || 0,
+            width: 0,
+            height: 0,
+            rotation: 0,
+            visible: true,
+            point: true
+          }));
+          log.info(`[AssetServer] Updated Graveyards object layer with ${graveyards.length} objects`);
+        }
+
+        if (warps) {
+          mapData.warps = warps;
+          log.info(`[AssetServer] Updated warps to: ${JSON.stringify(warps)}`);
+
+          // Also update the Tiled object layer for warps
+          let warpLayer = mapData.layers.find((l: any) => l.name === "Warps" && l.type === "objectgroup");
+          if (!warpLayer) {
+            warpLayer = {
+              draworder: "topdown",
+              id: Math.max(...mapData.layers.map((l: any) => l.id || 0), 0) + 1,
+              name: "Warps",
+              objects: [],
+              opacity: 1,
+              type: "objectgroup",
+              visible: true,
+              x: 0,
+              y: 0
+            };
+            mapData.layers.push(warpLayer);
+            log.info(`[AssetServer] Created Warps object layer`);
+          }
+
+          warpLayer.objects = warps.map((w: any, idx: number) => ({
+            id: idx + 1,
+            name: w.name,
+            type: "warp",
+            x: w.position?.x || 0,
+            y: w.position?.y || 0,
+            width: w.size?.width || 32,
+            height: w.size?.height || 32,
+            rotation: 0,
+            visible: true,
+            properties: [
+              { name: "map", type: "string", value: w.map },
+              { name: "x", type: "int", value: w.x },
+              { name: "y", type: "int", value: w.y }
+            ]
+          }));
+          log.info(`[AssetServer] Updated Warps object layer with ${warps.length} objects`);
+        }
+
+        log.info(`[AssetServer] After update - mapData has graveyards: ${mapData.graveyards ? 'yes' : 'no'}, warps: ${mapData.warps ? 'yes' : 'no'}`);
+
+        // Recalculate checksum with updated data
+        const jsonString = JSON.stringify(mapData);
+        const newChecksum = crypto.createHash("sha256").update(jsonString).digest("hex");
+
+        // Update map in cache
+        maps[mapIndex] = {
+          name: mapFile,
+          data: mapData,
+          checksum: newChecksum,
+          compressed: zlibModule.gzipSync(jsonString)
+        };
+
+        await assetCache.set("maps", maps);
+        log.info(`[AssetServer] Updated cache for map: ${mapFile}`);
+
+        // Persist changes to disk
+        try {
+          const assetPath = pathModule.join(import.meta.dir, "assets");
+          const mapsPath = pathModule.join(assetPath, "maps");
+          const mapFilePath = pathModule.join(mapsPath, mapFile);
+
+          log.info(`[AssetServer] Writing map to disk at: ${mapFilePath}`);
+          // Write map with formatted JSON
+          fsModule.writeFileSync(mapFilePath, JSON.stringify(mapData, null, 2), "utf-8");
+          log.info(`[AssetServer] Successfully wrote map to disk`);
+        } catch (diskError) {
+          log.warn(`[AssetServer] Failed to persist map properties to disk: ${diskError}`);
+          // Continue anyway - map is updated in cache
+        }
+
+        return new Response(JSON.stringify({ success: true, checksum: newChecksum, message: `Saved map properties for ${mapName}` }), { status: 200, headers: CORS_HEADERS });
+      } catch (error: any) {
+        log.error(`Error in /save-map-properties: ${error.message}`);
+        return new Response(JSON.stringify({ error: "Failed to save map properties" }), { status: 500, headers: CORS_HEADERS });
+      }
+    }
+  },
   "/sprite-sheet-template": {
     GET: async (req: Request) => {
       const url = new URL(req.url);
