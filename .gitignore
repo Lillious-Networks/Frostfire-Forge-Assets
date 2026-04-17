@@ -35,6 +35,8 @@ src/certs/*.ca-bundle
 
 # Game assets
 src/assets/tilesets/*
-!src/assets/tilesets/tiles.png
+src/assets/maps/*
+
 !src/assets/tilesets/MysticalValley_Environment.png
 !src/assets/tilesets/MysticalValley_Structures.png
+!src/assets/maps/overworld.json
