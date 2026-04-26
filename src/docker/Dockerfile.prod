@@ -1,5 +1,5 @@
 # Production Dockerfile for Frostfire Forge Asset Server
-FROM oven/bun:canary-slim AS base
+FROM oven/bun-slim AS base
 WORKDIR /app
 
 # Install dependencies
@@ -13,8 +13,5 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 EXPOSE 8000
-
-HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
-  CMD bun -e "fetch('http://localhost:8000/health').then(r => process.exit(0)).catch(() => process.exit(1))" || exit 1
 
 CMD ["bun", "run", "production"]
