@@ -4,7 +4,7 @@ services:
       context: ../../
       dockerfile: src/docker/Dockerfile.dev
     container_name: frostfire-assets-dev
-    restart: unless-stopped
+    restart: always
     ports:
       - "8000:8000"
     env_file:
