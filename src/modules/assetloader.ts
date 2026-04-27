@@ -5,7 +5,45 @@ import assetCache from "../services/assetCache";
 import zlib from "zlib";
 import crypto from "crypto";
 
-const assetPath = path.join(import.meta.dir, "..", "assets");
+// Load assets path from environment variable or use default
+function getAssetPath(): string {
+  const customAssetPath = process.env.ASSETS_PATH;
+
+  if (customAssetPath) {
+    // If custom path is provided, resolve it properly
+    let resolvedPath: string;
+
+    if (path.isAbsolute(customAssetPath)) {
+      // Absolute path - use as-is
+      resolvedPath = customAssetPath;
+    } else {
+      // Relative path - resolve from current working directory
+      // In Docker, cwd is /app, so relative paths work correctly
+      // Locally, cwd is project root, so relative paths also work
+      resolvedPath = path.resolve(process.cwd(), customAssetPath);
+    }
+
+    if (!fs.existsSync(resolvedPath)) {
+      log.error(`Assets directory not found at: ${resolvedPath}`);
+      process.exit(1);
+    }
+
+    log.info(`Using external assets directory: ${resolvedPath}`);
+    return resolvedPath;
+  }
+
+  // Default to src/assets
+  const defaultPath = path.join(import.meta.dir, "..", "assets");
+  if (!fs.existsSync(defaultPath)) {
+    log.error(`Assets directory not found at default location: ${defaultPath}`);
+    process.exit(1);
+  }
+
+  log.info(`Using default assets directory: ${defaultPath}`);
+  return defaultPath;
+}
+
+const assetPath = getAssetPath();
 const TILESETS_PATH = "tilesets";
 const MAPS_PATH = "maps";
 const ANIMATIONS_PATH = "animations";

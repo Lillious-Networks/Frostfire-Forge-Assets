@@ -8,3 +8,10 @@ services:
     network_mode: "host"
     env_file:
       - ../../.env.production
+    volumes:
+      # For relative ASSETS_PATH: prepend ../../ to resolve from project root
+      # For absolute ASSETS_PATH: use as-is (e.g., C:/Users/... or /mnt/...)
+      - ${ASSETS_PATH}:/app/assets
+    environment:
+      # Override ASSETS_PATH to point to mounted volume inside container
+      - ASSETS_PATH=/app/assets

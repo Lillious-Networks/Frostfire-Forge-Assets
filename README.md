@@ -101,6 +101,11 @@ This enables collaborative world building with instant persistence and real-time
 ## ⚙️ Environment Variables
 
 ```bash
+# Asset Loading
+ASSETS_PATH=src/assets                    # Path to assets directory (absolute or relative)
+                                          # Default: src/assets/
+                                          # If directory not found, server exits with error
+
 # Server Configuration
 ASSET_PORT=8000                           # HTTP server port
 ASSET_HOST=0.0.0.0                       # Server host (0.0.0.0 = accessible from all interfaces)
@@ -119,6 +124,32 @@ CORS_ALLOWED_ORIGINS="http://localhost:3000,http://localhost:8000" # Comma-separ
 # Authentication
 ASSET_SERVER_AUTH_KEY="your_secret_key"   # Shared secret for request authentication
 ```
+
+### ASSETS_PATH Configuration
+
+The `ASSETS_PATH` environment variable allows you to load assets from an external directory instead of the default `src/assets/`:
+
+- **Absolute Path**: `ASSETS_PATH=/path/to/external/assets`
+- **Relative Path**: `ASSETS_PATH=../external-assets`
+- **Default**: If not set, the server uses `src/assets/`
+- **Error Handling**: If the specified directory is not found, the server logs an error and exits with code 1
+
+**Example:**
+```bash
+# Using external assets from a shared location
+ASSETS_PATH=/mnt/shared/game-assets
+
+# Or relative to current working directory
+ASSETS_PATH=../assets
+```
+
+The asset directory must contain the following subdirectories:
+- `tilesets/` - Map tileset images (PNG)
+- `maps/` - Map data files (JSON)
+- `animations/` - Animation templates (JSON)
+- `spritesheets/` - Sprite sheet images (PNG)
+- `sprites/` - Sprite effect images (PNG)
+- `icons/` - Item/equipment icons (PNG)
 
 ---
 
@@ -157,30 +188,50 @@ bun production
 
 ## 🐳 Docker Deployment
 
+### Asset Path Configuration for Docker
+
+The `ASSETS_PATH` in your `.env.development` or `.env.production` file controls where assets are loaded:
+
+**For Docker**:
+- Use relative paths with `../../` prefix (e.g., `../../src/assets`)
+- Paths are resolved relative to the docker-compose file location (`src/docker/`)
+- Or use absolute paths (e.g., `C:/path/to/assets`)
+
+**For direct/local use** (running `bun development` or `bun production`):
+- Use relative paths (e.g., `./src/assets`)
+- Or use absolute paths to external directories (e.g., `C:/path/to/external/assets`)
+- Paths are resolved relative to the project root
+
+Inside the container, the assets are mounted at `/app/assets`, and the `ASSETS_PATH` environment variable is automatically overridden to `/app/assets` so the application uses the mounted directory.
+
+**Example configurations:**
+- Docker: `ASSETS_PATH=../../src/assets`
+- Local: `ASSETS_PATH=./src/assets` or `ASSETS_PATH=C:/path/to/assets`
+
 ### Development Compose
 
 ```bash
 # Start with docker-compose
-docker compose -f src/docker/docker-compose.dev.yml up -d
+npm run docker:dev
 
 # View logs
-docker compose -f src/docker/docker-compose.dev.yml logs -f
+npm run docker:dev:logs
 
 # Stop
-docker compose -f src/docker/docker-compose.dev.yml down
+npm run docker:dev:down
 ```
 
 ### Production Compose
 
 ```bash
 # Start with docker-compose
-docker compose -f src/docker/docker-compose.prod.yml up -d
+npm run docker:prod
 
 # View logs
-docker compose -f src/docker/docker-compose.prod.yml logs -f
+npm run docker:prod:logs
 
 # Stop
-docker compose -f src/docker/docker-compose.prod.yml down
+npm run docker:prod:down
 ```
 
 ### NPM Commands

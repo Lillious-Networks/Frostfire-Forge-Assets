@@ -17,16 +17,16 @@
   "scripts": {
     "development": "bun --env-file=.env.development ./src/index.ts",
     "production": "bun --env-file=.env.production ./src/index.ts",
-    "docker:dev": "docker compose -f src/docker/docker-compose.dev.yml up -d",
+    "docker:dev": "docker compose --env-file .env.development -f src/docker/docker-compose.dev.yml up -d",
     "docker:dev:down": "docker compose -f src/docker/docker-compose.dev.yml down",
     "docker:dev:logs": "docker compose -f src/docker/docker-compose.dev.yml logs -f",
-    "docker:dev:build": "docker compose -f src/docker/docker-compose.dev.yml build",
-    "docker:dev:rebuild": "docker compose -f src/docker/docker-compose.dev.yml up -d --build --force-recreate",
-    "docker:prod": "docker compose -f src/docker/docker-compose.prod.yml up -d",
+    "docker:dev:build": "docker compose --env-file .env.development -f src/docker/docker-compose.dev.yml build",
+    "docker:dev:rebuild": "docker compose --env-file .env.development -f src/docker/docker-compose.dev.yml up -d --build --force-recreate",
+    "docker:prod": "docker compose --env-file .env.production -f src/docker/docker-compose.prod.yml up -d",
     "docker:prod:down": "docker compose -f src/docker/docker-compose.prod.yml down",
     "docker:prod:logs": "docker compose -f src/docker/docker-compose.prod.yml logs -f",
-    "docker:prod:build": "docker compose -f src/docker/docker-compose.prod.yml build",
-    "docker:prod:rebuild": "docker compose -f src/docker/docker-compose.prod.yml up -d --build --force-recreate",
+    "docker:prod:build": "docker compose --env-file .env.production -f src/docker/docker-compose.prod.yml build",
+    "docker:prod:rebuild": "docker compose --env-file .env.production -f src/docker/docker-compose.prod.yml up -d --build --force-recreate",
     "prepare": "husky"
   }
 }
