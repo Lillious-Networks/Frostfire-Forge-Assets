@@ -23,6 +23,9 @@ const CORS_HEADERS = {
 };
 
 const routes = {
+  "/status": {
+    GET: () => new Response(JSON.stringify({ status: "OK" }), { status: 200, headers: CORS_HEADERS })
+  },
   "/tileset": {
     GET: async (req: Request) => {
       const url = new URL(req.url);
@@ -86,7 +89,7 @@ const routes = {
       if (!mapName) {
         return new Response(JSON.stringify({ error: "Missing map name" }), {
           status: 400,
-          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" }
+          headers: CORS_HEADERS
         });
       }
 
@@ -99,7 +102,7 @@ const routes = {
         if (!map) {
           return new Response(JSON.stringify({ error: "Map not found" }), {
             status: 404,
-            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" }
+            headers: CORS_HEADERS
           });
         }
 
@@ -153,13 +156,13 @@ const routes = {
 
         return new Response(JSON.stringify(chunk), {
           status: 200,
-          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" }
+          headers: CORS_HEADERS
         });
       } catch (error: any) {
         log.error(`Error serving map chunk: ${error.message}`);
         return new Response(JSON.stringify({ error: "Failed to fetch map chunk" }), {
           status: 500,
-          headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" }
+          headers: CORS_HEADERS
         });
       }
     }
@@ -713,7 +716,6 @@ Bun.serve({
     if (!address) {
       return new Response(JSON.stringify({ message: "Invalid request" }), { status: 400 });
     }
-    const ip = address.address;
 
     const route = routes[url.pathname as keyof typeof routes];
     // Block potentially dangerous HTTP methods

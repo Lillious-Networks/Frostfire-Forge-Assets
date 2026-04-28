@@ -14,4 +14,7 @@ COPY . .
 
 EXPOSE 8000
 
+HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
+  CMD bun --eval "const useSSL = process.env.WEBSRV_USESSL === 'true'; const port = useSSL ? (process.env.WEBSRV_PORTSSL || 8082) : (process.env.WEBSRV_PORT || 8000); const protocol = useSSL ? 'https' : 'http'; const res = await fetch(protocol + '://localhost:' + port + '/status').catch(() => ({ok: false})); process.exit(res.ok ? 0 : 1)"
+
 CMD ["bun", "run", "production"]
