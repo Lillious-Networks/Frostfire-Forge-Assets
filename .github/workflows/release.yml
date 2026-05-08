@@ -70,12 +70,18 @@ jobs:
           docker run -d --name assets-test --env-file=.env.development -p 8000:8000 ghcr.io/${{ steps.dockerfile.outputs.image_tag }}:latest
 
           # Wait for healthcheck to pass
-          docker run --rm \
-            --link assets-test:assets-test \
-            curlimages/curl:latest \
-            -f http://assets-test:8000/status || exit 1
+          for i in {1..30}; do
+            if curl -sf http://localhost:8000/status > /dev/null 2>&1; then
+              echo "Container is healthy"
+              exit 0
+            fi
+            echo "Waiting for container health... ($i/30)"
+            sleep 1
+          done
 
-          echo "Container started and is healthy"
+          echo "Container failed health check"
+          docker logs assets-test
+          exit 1
 
       - name: Stop Test Container
         if: always()
