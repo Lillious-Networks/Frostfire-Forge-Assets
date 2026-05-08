@@ -68,13 +68,14 @@ jobs:
       - name: Start and Test Docker Container
         run: |
           docker run -d --name assets-test --env-file=.env.development -p 8000:8000 ghcr.io/${{ steps.dockerfile.outputs.image_tag }}:latest
-          sleep 5
-          if ! docker ps | grep -q assets-test; then
-            echo "Container failed to start!"
-            docker logs assets-test
-            exit 1
-          fi
-          echo "Container started successfully"
+
+          # Wait for healthcheck to pass
+          docker run --rm \
+            --link assets-test:assets-test \
+            curlimages/curl:latest \
+            -f http://assets-test:8000/status || exit 1
+
+          echo "Container started and is healthy"
 
       - name: Stop Test Container
         if: always()
