@@ -1,112 +1,107 @@
-name: Assets > Release
+name: Release
 
 permissions:
-  contents: read
-  packages: write
+    contents: read
+    packages: write
 
 on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
-
-concurrency:
-  group: 'assets-release'
-  cancel-in-progress: true
+    push:
+        branches:
+            - main
+    workflow_dispatch:
 
 jobs:
-  publish-docker:
-    name: Build and Publish Docker Image
-    runs-on: ubuntu-latest
-    environment: development
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v6
+    publish-docker:
+        name: Build and Publish Docker Image
+        runs-on: ubuntu-latest
+        environment: development
+        steps:
+            - name: Checkout Repository
+              uses: actions/checkout@v6.0.2
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+            - name: Set up Docker Buildx
+              uses: docker/setup-buildx-action@v4.0.0
 
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+            - name: Log in to GitHub Container Registry
+              uses: docker/login-action@v4.1.0
+              with:
+                registry: ghcr.io
+                username: ${{ github.actor }}
+                password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract metadata for Docker
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=raw,value=latest
+            - name: Docker Metadata action
+              id: metadata
+              uses: docker/metadata-action@v6.0.0
+              with:
+                images: ghcr.io/${{ github.repository }}
+                tags: |
+                    type=raw,value=latest
 
-      - name: Set Image Tag
-        id: dockerfile
-        run: |
-          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
-          echo "dockerfile=./src/docker/Dockerfile.dev" >> $GITHUB_OUTPUT
-          echo "target=development" >> $GITHUB_OUTPUT
-          echo "image_tag=${REPO_LOWER}" >> $GITHUB_OUTPUT
+            - name: Set Image Tag
+              id: dockerfile
+              run: |
+                REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+                echo "dockerfile=./src/docker/Dockerfile.dev" >> $GITHUB_OUTPUT
+                echo "target=development" >> $GITHUB_OUTPUT
+                echo "image_tag=${REPO_LOWER}" >> $GITHUB_OUTPUT
 
-      - name: Build Docker Image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ${{ steps.dockerfile.outputs.dockerfile }}
-          target: ${{ steps.dockerfile.outputs.target }}
-          push: false
-          load: true
-          tags: ghcr.io/${{ steps.dockerfile.outputs.image_tag }}:latest
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          build-args: |
-            VERSION=${{ github.sha }}
-            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            - name: Build and push Docker images
+              uses: docker/build-push-action@v7.1.0
+              with:
+                context: .
+                file: ${{ steps.dockerfile.outputs.dockerfile }}
+                target: ${{ steps.dockerfile.outputs.target }}
+                push: false
+                tags: ghcr.io/${{ steps.dockerfile.outputs.image_tag }}:latest
+                labels: ${{ steps.metadata.outputs.labels }}
+                cache-from: type=gha
+                cache-to: type=gha,mode=max
+                build-args: |
+                    VERSION=${{ github.sha }}
+                    BUILD_DATE=${{ github.event.head_commit.timestamp }}
 
-      - name: Start and Test Docker Container
-        run: |
-          docker run -d --name assets-test \
-            --env-file=.env.development \
-            -e ASSETS_PATH=/app/src/assets \
-            -p 8000:8000 \
-            ghcr.io/${{ steps.dockerfile.outputs.image_tag }}:latest
+            - name: Start Docker Container
+              run: |
+                docker run -d --name assets-test \
+                    --env-file=.env.development \
+                    -e ASSETS_PATH=/app/src/assets \
+                    -p 8000:8000 \
+                    ghcr.io/${{ steps.dockerfile.outputs.image_tag }}:latest
 
-          # Wait for healthcheck to pass
-          for i in {1..30}; do
-            if curl -sf http://localhost:8000/status > /dev/null 2>&1; then
-              echo "Container is healthy"
-              exit 0
-            fi
-            echo "Waiting for container health... ($i/30)"
-            sleep 1
-          done
+                # Wait for healthcheck to pass
+                for i in {1..30}; do
+                    if curl -sf http://localhost:8000/status > /dev/null 2>&1; then
+                    echo "Container is healthy"
+                    exit 0
+                    fi
+                    echo "Waiting for container health... ($i/30)"
+                    sleep 1
+                done
 
-          echo "Container failed health check"
-          docker logs assets-test
-          exit 1
+                echo "Container failed health check"
+                docker logs assets-test
+                exit 1
 
-      - name: Stop Test Container
-        if: always()
-        run: |
-          docker stop assets-test || true
-          docker rm assets-test || true
+            - name: Stop Docker Container
+              if: always()
+              run: |
+                docker stop assets-test || true
+                docker rm assets-test || true
 
-      - name: Push Docker Image to GitHub Packages
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ${{ steps.dockerfile.outputs.dockerfile }}
-          target: ${{ steps.dockerfile.outputs.target }}
-          push: true
-          tags: |
-            ghcr.io/${{ steps.dockerfile.outputs.image_tag }}:latest
-            ghcr.io/${{ steps.dockerfile.outputs.image_tag }}:${{ github.sha }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64
-          build-args: |
-            VERSION=${{ github.sha }}
-            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            - name: Push Docker Image to GitHub Packages
+              uses: docker/build-push-action@v7.1.0
+              with:
+                context: .
+                file: ${{ steps.dockerfile.outputs.dockerfile }}
+                target: ${{ steps.dockerfile.outputs.target }}
+                push: true
+                tags: |
+                    ghcr.io/${{ steps.dockerfile.outputs.image_tag }}:latest
+                    ghcr.io/${{ steps.dockerfile.outputs.image_tag }}:${{ github.sha }}
+                labels: ${{ steps.metadata.outputs.labels }}
+                cache-from: type=gha
+                cache-to: type=gha,mode=max
+                platforms: linux/amd64,linux/arm64,windows/amd64
+                build-args: |
+                    VERSION=${{ github.sha }}
+                    BUILD_DATE=${{ github.event.head_commit.timestamp }}
