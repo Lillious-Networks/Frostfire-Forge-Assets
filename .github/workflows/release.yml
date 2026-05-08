@@ -67,7 +67,11 @@ jobs:
 
       - name: Start and Test Docker Container
         run: |
-          docker run -d --name assets-test --env-file=.env.development -p 8000:8000 ghcr.io/${{ steps.dockerfile.outputs.image_tag }}:latest
+          docker run -d --name assets-test \
+            --env-file=.env.development \
+            -e ASSETS_PATH=/app/src/assets \
+            -p 8000:8000 \
+            ghcr.io/${{ steps.dockerfile.outputs.image_tag }}:latest
 
           # Wait for healthcheck to pass
           for i in {1..30}; do
