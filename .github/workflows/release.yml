@@ -10,6 +10,10 @@ on:
             - main
     workflow_dispatch:
 
+concurrency:
+  group: 'asset-release'
+  cancel-in-progress: true
+
 jobs:
     publish-docker:
         name: Build and Publish Docker Image
