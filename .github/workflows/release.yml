@@ -101,7 +101,7 @@ jobs:
                 labels: ${{ steps.metadata.outputs.labels }}
                 cache-from: type=gha
                 cache-to: type=gha,mode=max
-                platforms: linux/amd64,linux/arm64,windows/amd64
+                platforms: linux/amd64,linux/arm64
                 build-args: |
                     VERSION=${{ github.sha }}
                     BUILD_DATE=${{ github.event.head_commit.timestamp }}
