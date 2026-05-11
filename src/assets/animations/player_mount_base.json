@@ -9,152 +9,392 @@
     "idle": {
       "directions": {
         "down": {
-          "frames": [1],
-          "frameDuration": 1000,
-          "loop": false,
-          "offset": {
-            "x": 0,
-            "y": 0
-          }
+          "frames": [
+            1
+          ],
+          "frameDurations": [
+            1000
+          ],
+          "offsets": [
+            {
+              "x": 0,
+              "y": -7
+            }
+          ],
+          "loop": false
         },
         "up": {
-          "frames": [10],
-          "frameDuration": 1000,
-          "loop": false,
-          "offset": {
-            "x": 0,
-            "y": 0
-          }
+          "frames": [
+            10
+          ],
+          "frameDurations": [
+            1000
+          ],
+          "offsets": [
+            {
+              "x": 0,
+              "y": -5
+            }
+          ],
+          "loop": false
         },
         "left": {
-          "frames": [6],
-          "frameDuration": 1000,
-          "loop": false,
-          "offset": {
-            "x": 0,
-            "y": 0
-          }
+          "frames": [
+            6
+          ],
+          "frameDurations": [
+            1000
+          ],
+          "offsets": [
+            {
+              "x": 0,
+              "y": -4
+            }
+          ],
+          "loop": false
         },
         "right": {
-          "frames": [5],
-          "frameDuration": 1000,
-          "loop": false,
-          "offset": {
-            "x": 0,
-            "y": 0
-          }
+          "frames": [
+            5
+          ],
+          "frameDurations": [
+            1000
+          ],
+          "offsets": [
+            {
+              "x": 0,
+              "y": -4
+            }
+          ],
+          "loop": false
         },
         "downleft": {
-          "frames": [1],
-          "frameDuration": 1000,
-          "loop": false,
-          "offset": {
-            "x": 0,
-            "y": 0
-          }
+          "frames": [
+            1
+          ],
+          "frameDurations": [
+            1000
+          ],
+          "offsets": [
+            {
+              "x": 0,
+              "y": -7
+            }
+          ],
+          "loop": false
         },
         "downright": {
-          "frames": [1],
-          "frameDuration": 1000,
-          "loop": false,
-          "offset": {
-            "x": 0,
-            "y": 0
-          }
+          "frames": [
+            1
+          ],
+          "frameDurations": [
+            1000
+          ],
+          "offsets": [
+            {
+              "x": 0,
+              "y": -7
+            }
+          ],
+          "loop": false
         },
         "upleft": {
-          "frames": [10],
-          "frameDuration": 1000,
-          "loop": false,
-          "offset": {
-            "x": 0,
-            "y": 0
-          }
+          "frames": [
+            10
+          ],
+          "frameDurations": [
+            1000
+          ],
+          "offsets": [
+            {
+              "x": 0,
+              "y": -5
+            }
+          ],
+          "loop": false
         },
         "upright": {
-          "frames": [10],
-          "frameDuration": 1000,
-          "loop": false,
-          "offset": {
-            "x": 0,
-            "y": 0
-          }
+          "frames": [
+            10
+          ],
+          "frameDurations": [
+            1000
+          ],
+          "offsets": [
+            {
+              "x": 0,
+              "y": -5
+            }
+          ],
+          "loop": false
         }
       }
     },
     "walk": {
       "directions": {
         "down": {
-          "frames": [1, 2, 1, 0],
-          "frameDuration": 125,
-          "loop": true,
-          "offset": {
-            "x": 0,
-            "y": 0
-          }
+          "frames": [
+            2,
+            1,
+            0,
+            1
+          ],
+          "frameDurations": [
+            125,
+            125,
+            125,
+            125
+          ],
+          "offsets": [
+            {
+              "x": 0,
+              "y": -7
+            },
+            {
+              "x": 0,
+              "y": -7
+            },
+            {
+              "x": 0,
+              "y": -7
+            },
+            {
+              "x": 0,
+              "y": -7
+            }
+          ],
+          "loop": true
         },
         "up": {
-          "frames": [10, 11, 10, 9],
-          "frameDuration": 125,
-          "loop": true,
-          "offset": {
-            "x": 0,
-            "y": 0
-          }
+          "frames": [
+            10,
+            11,
+            10,
+            9
+          ],
+          "frameDurations": [
+            125,
+            125,
+            125,
+            125
+          ],
+          "offsets": [
+            {
+              "x": 0,
+              "y": -5
+            },
+            {
+              "x": 0,
+              "y": -5
+            },
+            {
+              "x": 0,
+              "y": -5
+            },
+            {
+              "x": 0,
+              "y": -5
+            }
+          ],
+          "loop": true
         },
         "left": {
-          "frames": [7, 8, 7, 6],
-          "frameDuration": 125,
-          "loop": true,
-          "offset": {
-            "x": 0,
-            "y": 0
-          }
+          "frames": [
+            7,
+            8,
+            7,
+            6
+          ],
+          "frameDurations": [
+            125,
+            125,
+            125,
+            125
+          ],
+          "offsets": [
+            {
+              "x": 0,
+              "y": -4
+            },
+            {
+              "x": 0,
+              "y": -4
+            },
+            {
+              "x": 0,
+              "y": -4
+            },
+            {
+              "x": 0,
+              "y": -4
+            }
+          ],
+          "loop": true
         },
         "right": {
-          "frames": [4, 5, 4, 3],
-          "frameDuration": 125,
-          "loop": true,
-          "offset": {
-            "x": 0,
-            "y": 0
-          }
+          "frames": [
+            4,
+            5,
+            4,
+            3
+          ],
+          "frameDurations": [
+            125,
+            125,
+            125,
+            125
+          ],
+          "offsets": [
+            {
+              "x": 0,
+              "y": -4
+            },
+            {
+              "x": 0,
+              "y": -4
+            },
+            {
+              "x": 0,
+              "y": -4
+            },
+            {
+              "x": 0,
+              "y": -4
+            }
+          ],
+          "loop": true
         },
         "downleft": {
-          "frames": [1, 2, 1, 0],
-          "frameDuration": 125,
-          "loop": true,
-          "offset": {
-            "x": 0,
-            "y": 0
-          }
+          "frames": [
+            0,
+            1,
+            2,
+            1
+          ],
+          "frameDurations": [
+            125,
+            125,
+            125,
+            125
+          ],
+          "offsets": [
+            {
+              "x": 0,
+              "y": -7
+            },
+            {
+              "x": 0,
+              "y": -7
+            },
+            {
+              "x": 0,
+              "y": -7
+            },
+            {
+              "x": 0,
+              "y": -7
+            }
+          ],
+          "loop": true
         },
         "downright": {
-          "frames": [1, 2, 1, 0],
-          "frameDuration": 125,
-          "loop": true,
-          "offset": {
-            "x": 0,
-            "y": 0
-          }
+          "frames": [
+            2,
+            1,
+            0,
+            1
+          ],
+          "frameDurations": [
+            125,
+            125,
+            125,
+            125
+          ],
+          "offsets": [
+            {
+              "x": 0,
+              "y": -7
+            },
+            {
+              "x": 0,
+              "y": -7
+            },
+            {
+              "x": 0,
+              "y": -7
+            },
+            {
+              "x": 0,
+              "y": -7
+            }
+          ],
+          "loop": true
         },
         "upleft": {
-          "frames": [10, 11, 10, 9],
-          "frameDuration": 125,
-          "loop": true,
-          "offset": {
-            "x": 0,
-            "y": 0
-          }
+          "frames": [
+            9,
+            10,
+            11,
+            10
+          ],
+          "frameDurations": [
+            125,
+            125,
+            125,
+            125
+          ],
+          "offsets": [
+            {
+              "x": 0,
+              "y": -4
+            },
+            {
+              "x": 0,
+              "y": -4
+            },
+            {
+              "x": 0,
+              "y": -4
+            },
+            {
+              "x": 0,
+              "y": -4
+            }
+          ],
+          "loop": true
         },
         "upright": {
-          "frames": [10, 11, 10, 9],
-          "frameDuration": 125,
-          "loop": true,
-          "offset": {
-            "x": 0,
-            "y": 0
-          }
+          "frames": [
+            11,
+            10,
+            9,
+            10
+          ],
+          "frameDurations": [
+            125,
+            125,
+            125,
+            125
+          ],
+          "offsets": [
+            {
+              "x": 0,
+              "y": -4
+            },
+            {
+              "x": 0,
+              "y": -4
+            },
+            {
+              "x": 0,
+              "y": -4
+            },
+            {
+              "x": 0,
+              "y": -4
+            }
+          ],
+          "loop": true
         }
       }
     }
