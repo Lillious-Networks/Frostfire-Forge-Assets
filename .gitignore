@@ -21,6 +21,7 @@ src/logs/
 src/webserver/public/js/web/*.js
 
 # SSL/TLS Certificates
+certs/
 src/certs/*.crt
 src/certs/*.key
 src/certs/*.pem
