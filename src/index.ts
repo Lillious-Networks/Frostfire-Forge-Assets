@@ -9,9 +9,9 @@ import { initializeAssets } from "./modules/assetloader";
 import assetCache from "./services/assetCache";
 
 
-const _cert = process.env.WEBSRV_CERT_PATH || path.join(import.meta.dir, "../certs/webserver/cert.pem");
-const _key = process.env.WEBSRV_KEY_PATH || path.join(import.meta.dir, "../certs/webserver/key.pem");
-const _ca = process.env.WEBSRV_CA_PATH || path.join(import.meta.dir, "../certs/webserver/cert.ca-bundle");
+const _cert = process.env.WEBSRV_CERT_PATH || path.join(import.meta.dir, "../certs/cert.pem");
+const _key = process.env.WEBSRV_KEY_PATH || path.join(import.meta.dir, "../certs/key.pem");
+const _ca = process.env.WEBSRV_CA_PATH || path.join(import.meta.dir, "../certs/cert.ca-bundle");
 const _https = process.env.WEBSRV_USESSL === "true" && fs.existsSync(_cert) && fs.existsSync(_key);
 const authKey = process.env.ASSET_SERVER_AUTH_KEY || process.env.GATEWAY_AUTH_KEY || "change-this-secret-key";
 
