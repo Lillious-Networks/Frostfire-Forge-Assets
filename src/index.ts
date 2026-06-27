@@ -5,7 +5,7 @@ import fs from "fs";
 import zlib from "zlib";
 
 // Load asset loader
-import { initializeAssets } from "./modules/assetloader";
+import { initializeAssets, applyChunksWithRebase } from "./modules/assetloader";
 import assetCache from "./services/assetCache";
 
 
@@ -130,7 +130,7 @@ const routes = {
                 const mapY = startY + y;
                 const mapIndex = mapY * mapData.width + mapX;
 
-                if (mapIndex < layer.data.length) {
+                if (mapX >= 0 && mapX < mapData.width && mapY >= 0 && mapY < mapData.height && mapIndex < layer.data.length) {
                   chunkLayerData.push(layer.data[mapIndex]);
                 } else {
                   chunkLayerData.push(0);
@@ -228,8 +228,8 @@ const routes = {
   "/save-map-chunks": {
     POST: async (req: Request) => {
       try {
-        const body = await req.json() as { mapName: string; chunks: any[]; authKey: string; serverId?: string };
-        const { mapName, chunks, authKey: requestAuthKey, serverId } = body;
+        const body = await req.json() as { mapName: string; chunks: any[]; bounds?: { minTileX?: number; minTileY?: number; width?: number; height?: number; infinite?: boolean } | null; authKey: string; serverId?: string };
+        const { mapName, chunks, bounds, authKey: requestAuthKey, serverId } = body;
 
         if (requestAuthKey !== authKey) {
           return new Response(JSON.stringify({ error: "Invalid authentication key" }), { status: 401, headers: CORS_HEADERS });
@@ -252,32 +252,10 @@ const routes = {
           return new Response(JSON.stringify({ error: "Map not found" }), { status: 404, headers: CORS_HEADERS });
         }
 
-        // Update chunks in map data
+        // Update chunks in map data, growing / re-basing the origin for
+        // infinite-map expansion as needed.
         const mapData = maps[mapIndex].data;
-        for (const chunk of chunks) {
-          const { chunkX, chunkY, width: chunkWidth, height: chunkHeight, layers } = chunk;
-          const startX = chunkX * chunkWidth;
-          const startY = chunkY * chunkHeight;
-
-          for (const chunkLayer of layers) {
-            const mapLayer = mapData.layers.find((l: any) => l.name === chunkLayer.name);
-            if (mapLayer && mapLayer.data) {
-              for (let y = 0; y < chunkHeight; y++) {
-                for (let x = 0; x < chunkWidth; x++) {
-                  const chunkIndex = y * chunkWidth + x;
-                  const mapX = startX + x;
-                  const mapY = startY + y;
-                  const mapIndex = mapY * mapLayer.width + mapX;
-                  if (mapIndex < mapLayer.data.length && chunkIndex < chunkLayer.data.length) {
-                    mapLayer.data[mapIndex] = chunkLayer.data[chunkIndex];
-                  }
-                }
-              }
-            } else if (!mapLayer) {
-              log.warn(`[AssetServer] Layer "${chunkLayer.name}" not found in map, skipping`);
-            }
-          }
-        }
+        applyChunksWithRebase(mapData, chunks, bounds);
 
         // Recalculate checksum with minified JSON
         const jsonString = JSON.stringify(mapData);
