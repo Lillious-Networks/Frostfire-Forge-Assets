@@ -44,6 +44,11 @@ function getAssetPath(): string {
 }
 
 const assetPath = getAssetPath();
+
+export function getAssetsPath(): string {
+  return assetPath;
+}
+
 const TILESETS_PATH = "tilesets";
 const MAPS_PATH = "maps";
 const ANIMATIONS_PATH = "animations";

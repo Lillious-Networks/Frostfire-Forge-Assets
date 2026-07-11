@@ -5,7 +5,7 @@ import fs from "fs";
 import zlib from "zlib";
 
 // Load asset loader
-import { initializeAssets, applyChunksWithRebase } from "./modules/assetloader";
+import { initializeAssets, applyChunksWithRebase, getAssetsPath } from "./modules/assetloader";
 import assetCache from "./services/assetCache";
 
 
@@ -39,7 +39,7 @@ const routes = {
       }
 
       try {
-        const tilesetDir = path.resolve(import.meta.dir, "assets", "tilesets");
+        const tilesetDir = path.resolve(getAssetsPath(), "tilesets");
         const tilesetPath = path.resolve(tilesetDir, name);
 
         // Prevent path traversal attacks - ensure resolved path is within tilesets directory
@@ -273,7 +273,7 @@ const routes = {
 
         // Persist changes to disk
         try {
-          const assetPath = pathModule.join(import.meta.dir, "assets");
+          const assetPath = getAssetsPath();
           const mapsPath = pathModule.join(assetPath, "maps");
           const mapFilePath = pathModule.join(mapsPath, mapFile);
 
@@ -420,7 +420,7 @@ const routes = {
 
         // Persist changes to disk
         try {
-          const assetPath = pathModule.join(import.meta.dir, "assets");
+          const assetPath = getAssetsPath();
           const mapsPath = pathModule.join(assetPath, "maps");
           const mapFilePath = pathModule.join(mapsPath, mapFile);
 
@@ -564,10 +564,10 @@ const routes = {
 
       try {
         // Serve sprite PNG files directly from sprites directory
-        const spritePath = path.resolve(import.meta.dir, "assets", "sprites", `${name}.png`);
+        const spritePath = path.resolve(getAssetsPath(), "sprites", `${name}.png`);
 
         // Prevent path traversal attacks
-        const relativePath = path.relative(path.resolve(import.meta.dir, "assets", "sprites"), spritePath);
+        const relativePath = path.relative(path.resolve(getAssetsPath(), "sprites"), spritePath);
         if (relativePath.startsWith("..")) {
           return new Response(JSON.stringify({ error: "Invalid sprite name" }), {
             status: 400,
@@ -612,10 +612,10 @@ const routes = {
       }
 
       try {
-        const iconPath = path.resolve(import.meta.dir, "assets", "icons", `${name}.png`);
+        const iconPath = path.resolve(getAssetsPath(), "icons", `${name}.png`);
 
         // Prevent path traversal attacks
-        const relativePath = path.relative(path.resolve(import.meta.dir, "assets", "icons"), iconPath);
+        const relativePath = path.relative(path.resolve(getAssetsPath(), "icons"), iconPath);
         if (relativePath.startsWith("..")) {
           return new Response(JSON.stringify({ error: "Invalid icon name" }), {
             status: 400,
@@ -724,7 +724,7 @@ Bun.serve({
 
     // Try to serve as static file from assets directory
     try {
-      const assetPath = path.join(import.meta.dir, "assets", url.pathname.replace(/^\//, ""));
+      const assetPath = path.join(getAssetsPath(), url.pathname.replace(/^\//, ""));
 
       if (fs.existsSync(assetPath) && fs.statSync(assetPath).isFile()) {
         const fileContent = fs.readFileSync(assetPath);
