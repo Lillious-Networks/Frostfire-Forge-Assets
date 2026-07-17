@@ -22,6 +22,33 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type"
 };
 
+// Fallback icon served when a requested icon/sprite image does not exist.
+// The X-Asset-Fallback header lets clients detect the fallback and opt out
+// of rendering it (e.g. spell projectiles).
+function serveMissingIcon(): Response {
+  try {
+    const missingIconPath = path.resolve(getAssetsPath(), "icons", "missing_icon.png");
+    if (fs.existsSync(missingIconPath)) {
+      const missingIconData = fs.readFileSync(missingIconPath);
+      return new Response(missingIconData, {
+        status: 200,
+        headers: {
+          "Cache-Control": "no-cache",
+          "X-Asset-Fallback": "missing_icon",
+          "Access-Control-Expose-Headers": "X-Asset-Fallback",
+          ...CORS_HEADERS
+        }
+      });
+    }
+  } catch (error: any) {
+    log.error(`Error serving missing icon fallback: ${error.message}`);
+  }
+  return new Response(JSON.stringify({ error: "Icon not found" }), {
+    status: 404,
+    headers: CORS_HEADERS
+  });
+}
+
 const routes = {
   "/status": {
     GET: () => new Response(JSON.stringify({ status: "OK" }), { status: 200, headers: CORS_HEADERS })
@@ -576,10 +603,7 @@ const routes = {
         }
 
         if (!fs.existsSync(spritePath)) {
-          return new Response(JSON.stringify({ error: "Sprite not found" }), {
-            status: 404,
-            headers: CORS_HEADERS
-          });
+          return serveMissingIcon();
         }
 
         const spriteData = fs.readFileSync(spritePath);
@@ -624,10 +648,7 @@ const routes = {
         }
 
         if (!fs.existsSync(iconPath)) {
-          return new Response(JSON.stringify({ error: "Icon not found" }), {
-            status: 404,
-            headers: CORS_HEADERS
-          });
+          return serveMissingIcon();
         }
 
         const iconData = fs.readFileSync(iconPath);
