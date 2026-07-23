@@ -5,7 +5,7 @@ import fs from "fs";
 import zlib from "zlib";
 
 // Load asset loader
-import { initializeAssets, applyChunksWithRebase, getAssetsPath } from "./modules/assetloader";
+import { initializeAssets, applyChunksWithRebase, getAssetsPath, normalizeInfiniteMap } from "./modules/assetloader";
 import assetCache from "./services/assetCache";
 
 
@@ -236,6 +236,7 @@ const routes = {
         let maps = await assetCache.get("maps") as any[];
         if (!maps) maps = [];
         const crypto = await import("crypto");
+        normalizeInfiniteMap(mapData);
         const checksum = crypto.createHash("sha256").update(JSON.stringify(mapData)).digest("hex");
         const existingIndex = maps.findIndex((m: any) => m.name === mapName);
         if (existingIndex >= 0) {

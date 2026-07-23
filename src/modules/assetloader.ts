@@ -499,7 +499,7 @@ export function applyChunksWithRebase(
   return { shiftX: netShiftX, shiftY: netShiftY, width: finalWidth, height: finalHeight };
 }
 
-function normalizeInfiniteMap(mapData: any): void {
+export function normalizeInfiniteMap(mapData: any): void {
   if (!mapData || mapData.infinite !== true || !Array.isArray(mapData.layers)) return;
 
   // The map's declared width/height go stale the moment "infinite" is enabled in
