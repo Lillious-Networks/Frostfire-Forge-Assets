@@ -582,10 +582,11 @@ function processMapFile(file: string): MapData | null {
     return null;
   }
 
+  normalizeInfiniteMap(parsed);
+
+  // Compute serialized form and checksum after normalizeInfiniteMap so sync comparisons match
   const jsonString = JSON.stringify(parsed);
   const compressedData = zlib.gzipSync(jsonString);
-
-  // Calculate checksum for map sync
   const checksum = crypto.createHash("sha256").update(jsonString).digest("hex");
 
   log.debug(`Loaded map: ${file}`);
