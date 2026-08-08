@@ -7,6 +7,7 @@ services:
     restart: always
     ports:
       - "8000:8000"
+      - "8000:8000/udp"
     env_file:
       - ../../.env.development
     volumes:

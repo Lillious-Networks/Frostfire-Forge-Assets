@@ -13,6 +13,16 @@ const _cert = process.env.WEBSRV_CERT_PATH || path.join(import.meta.dir, "../cer
 const _key = process.env.WEBSRV_KEY_PATH || path.join(import.meta.dir, "../certs/key.pem");
 const _ca = process.env.WEBSRV_CA_PATH || path.join(import.meta.dir, "../certs/cert.ca-bundle");
 const _https = process.env.WEBSRV_USESSL === "true" && fs.existsSync(_cert) && fs.existsSync(_key);
+
+if (process.env.WEBSRV_USESSL === "true") {
+  if (!_https) {
+    console.error("[Asset Server] SSL requested but certificates not found.");
+    console.error(`  Cert path: ${_cert} (exists: ${fs.existsSync(_cert)})`);
+    console.error(`  Key path:  ${_key} (exists: ${fs.existsSync(_key)})`);
+  } else {
+    console.log(`[Asset Server] SSL enabled (HTTP/3 + HTTP/1.1 fallback)`);
+  }
+}
 const authKey = process.env.ASSET_SERVER_AUTH_KEY || process.env.GATEWAY_AUTH_KEY || "change-this-secret-key";
 
 const CORS_HEADERS = {
@@ -719,8 +729,21 @@ Bun.serve({
     }
 
     const route = routes[url.pathname as keyof typeof routes];
+    // Handle CORS preflight
+    if (req.method === "OPTIONS") {
+      return new Response(null, {
+        status: 204,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Max-Age": "86400",
+        },
+      });
+    }
+
     // Block potentially dangerous HTTP methods
-    if (req.method === "CONNECT" || req.method === "TRACE" || req.method === "TRACK" || req.method === "OPTIONS") {
+    if (req.method === "CONNECT" || req.method === "TRACE" || req.method === "TRACK") {
       return new Response("Forbidden", { status: 403 });
     }
 
@@ -769,7 +792,8 @@ Bun.serve({
           ? fs.readFileSync(_cert) + "\n" + fs.readFileSync(_ca)
           : fs.readFileSync(_cert),
         key: fs.readFileSync(_key),
-      }
+      },
+      http3: true,
     }
   : {}),
 });
