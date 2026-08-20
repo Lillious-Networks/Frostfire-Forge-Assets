@@ -718,6 +718,7 @@ Bun.serve({
     port: serverPort,
     development: false,
     reusePort: false,
+    http3: true,
   async fetch(req: Request, server: any) {
     const url = tryParseURL(req.url);
     if (!url) {
