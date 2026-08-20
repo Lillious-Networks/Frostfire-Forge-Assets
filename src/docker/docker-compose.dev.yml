@@ -5,9 +5,7 @@ services:
       dockerfile: src/docker/Dockerfile.dev
     container_name: frostfire-assets-dev
     restart: always
-    ports:
-      - "8000:8000"
-      - "8000:8000/udp"
+    network_mode: "host"
     env_file:
       - ../../.env.development
     volumes:
