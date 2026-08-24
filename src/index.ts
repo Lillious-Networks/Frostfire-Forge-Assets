@@ -9,16 +9,16 @@ import { initializeAssets, applyChunksWithRebase, getAssetsPath, normalizeInfini
 import assetCache from "./services/assetCache";
 
 
-const _cert = process.env.WEBSRV_CERT_PATH || path.join(import.meta.dir, "../certs/cert.pem");
-const _key = process.env.WEBSRV_KEY_PATH || path.join(import.meta.dir, "../certs/key.pem");
-const _ca = process.env.WEBSRV_CA_PATH || path.join(import.meta.dir, "../certs/cert.ca-bundle");
-const _https = process.env.WEBSRV_USESSL === "true" && fs.existsSync(_cert) && fs.existsSync(_key);
+const _cert = process.env.TLS_CERT_PATH;
+const _key = process.env.TLS_KEY_PATH;
+const _ca = process.env.TLS_CA_PATH;
+const _https = process.env.HTTP_USE_SSL === "true" && !!_cert && !!_key && fs.existsSync(_cert) && fs.existsSync(_key);
 
-if (process.env.WEBSRV_USESSL === "true") {
+if (process.env.HTTP_USE_SSL === "true") {
   if (!_https) {
     console.error("[Asset Server] SSL requested but certificates not found.");
-    console.error(`  Cert path: ${_cert} (exists: ${fs.existsSync(_cert)})`);
-    console.error(`  Key path:  ${_key} (exists: ${fs.existsSync(_key)})`);
+    console.error(`  Cert path: ${_cert || "(TLS_CERT_PATH not set)"} (exists: ${!!_cert && fs.existsSync(_cert)})`);
+    console.error(`  Key path:  ${_key || "(TLS_KEY_PATH not set)"} (exists: ${!!_key && fs.existsSync(_key)})`);
   } else {
     console.log(`[Asset Server] SSL enabled (HTTP/3 + HTTP/1.1 fallback)`);
   }
@@ -788,7 +788,7 @@ Bun.serve({
   },
   ...(_https ? {
       tls: {
-        cert: fs.existsSync(_ca)
+        cert: _ca && fs.existsSync(_ca)
           ? fs.readFileSync(_cert) + "\n" + fs.readFileSync(_ca)
           : fs.readFileSync(_cert),
         key: fs.readFileSync(_key),

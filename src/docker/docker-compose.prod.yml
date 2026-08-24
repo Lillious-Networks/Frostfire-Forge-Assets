@@ -13,7 +13,7 @@ services:
       # For absolute ASSETS_PATH: use as-is (e.g., C:/Users/... or /mnt/...)
       - ${ASSETS_PATH}:/app/assets
       # TLS certificates for HTTP/3 (QUIC) — HTTP/3 requires TLS
-      - ../../src/certs:/app/certs:ro
+      - ../../src/certs:/app/src/certs:ro
     environment:
       # Override ASSETS_PATH to point to mounted volume inside container
       - ASSETS_PATH=/app/assets

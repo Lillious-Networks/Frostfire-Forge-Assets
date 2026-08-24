@@ -107,19 +107,14 @@ ASSETS_PATH=src/assets                    # Path to assets directory (absolute o
                                           # If directory not found, server exits with error
 
 # Server Configuration
-ASSET_PORT=8000                           # HTTP server port
-ASSET_HOST=0.0.0.0                       # Server host (0.0.0.0 = accessible from all interfaces)
-WEBSRV_PORT=8000                         # Web server port (typically same as ASSET_PORT)
-WEBSRV_PORTSSL=8443                      # HTTPS port
-WEBSRV_USESSL=false                      # Enable SSL/TLS
+WEBSRV_PORT=8000                         # Web server port
+WEBSRV_PORTSSL=8082                      # HTTPS port
+HTTP_USE_SSL=false                       # Enable SSL/TLS
 
-# SSL Certificates (if WEBSRV_USESSL=true)
-WEBSRV_CERT_PATH=./src/certs/cert.pem
-WEBSRV_KEY_PATH=./src/certs/key.pem
-WEBSRV_CA_PATH=./src/certs/cert.ca-bundle
-
-# CORS Configuration (Security)
-CORS_ALLOWED_ORIGINS="http://localhost:3000,http://localhost:8000" # Comma-separated list of allowed origins
+# TLS Certificates (required when HTTP_USE_SSL=true)
+TLS_CERT_PATH=./src/certs/cert.pem
+TLS_KEY_PATH=./src/certs/key.pem
+TLS_CA_PATH=./src/certs/cert.ca-bundle
 
 # Authentication
 ASSET_SERVER_AUTH_KEY="your_secret_key"   # Shared secret for request authentication
@@ -212,53 +207,55 @@ Inside the container, the assets are mounted at `/app/assets`, and the `ASSETS_P
 
 ```bash
 # Start with docker-compose
-npm run docker:dev
+bun run docker:dev
 
 # View logs
-npm run docker:dev:logs
+bun run docker:dev:logs
 
 # Stop
-npm run docker:dev:down
+bun run docker:dev:down
 ```
 
 ### Production Compose
 
 ```bash
 # Start with docker-compose
-npm run docker:prod
+bun run docker:prod
 
 # View logs
-npm run docker:prod:logs
+bun run docker:prod:logs
 
 # Stop
-npm run docker:prod:down
+bun run docker:prod:down
 ```
 
-### NPM Commands
+### Docker Commands
 
 ```bash
 # Development
-npm run docker:dev              # Start dev container
-npm run docker:dev:logs         # View logs
-npm run docker:dev:rebuild      # Rebuild and restart
-npm run docker:dev:down         # Stop dev container
+bun run docker:dev              # Start dev container
+bun run docker:dev:logs         # View logs
+bun run docker:dev:rebuild      # Rebuild and restart
+bun run docker:dev:down         # Stop dev container
 
 # Production
-npm run docker:prod             # Start prod container
-npm run docker:prod:logs        # View logs
-npm run docker:prod:rebuild     # Rebuild and restart
-npm run docker:prod:down        # Stop prod container
+bun run docker:prod             # Start prod container
+bun run docker:prod:logs        # View logs
+bun run docker:prod:rebuild     # Rebuild and restart
+bun run docker:prod:down        # Stop prod container
 ```
 
 ---
 
 ### Authentication
 
-All endpoints require authentication via the `Authorization` header with the Bearer token matching the `ASSET_SERVER_AUTH_KEY` environment variable.
+Write endpoints (`/update-map`, `/save-map-chunks`, `/save-map-properties`, `/map-checksums`) require the `authKey` field in the request body to match the `ASSET_SERVER_AUTH_KEY` environment variable. Read endpoints are open.
 
 **Example:**
 ```bash
-curl -H "Authorization: Bearer your_secret_key" http://localhost:8000/maps
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"authKey": "your_secret_key", "checksums": {}, "serverId": "server-1"}' \
+  http://localhost:8000/map-checksums
 ```
 
 If authentication fails, the server responds with a `401 Unauthorized` status.

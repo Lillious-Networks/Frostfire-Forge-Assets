@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Install dependencies
 FROM base AS deps
-COPY package.json bun.lockb* ./
+COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --ignore-scripts
 
 # Development stage
@@ -12,9 +12,9 @@ FROM base AS development
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
-EXPOSE 80 443 443/udp 8000 8000/udp 8443 8443/udp
+EXPOSE 80 443 443/udp 8000 8000/udp 8082 8082/udp
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
-  CMD bun --eval "const useSSL = process.env.WEBSRV_USESSL === 'true'; const port = useSSL ? (process.env.WEBSRV_PORTSSL || 8082) : (process.env.WEBSRV_PORT || 8000); const protocol = useSSL ? 'https' : 'http'; const res = await fetch(protocol + '://localhost:' + port + '/status').catch(() => ({ok: false})); process.exit(res.ok ? 0 : 1)"
+  CMD bun --eval "process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0'; const useSSL = process.env.HTTP_USE_SSL === 'true'; const port = useSSL ? (process.env.WEBSRV_PORTSSL || 8082) : (process.env.WEBSRV_PORT || 8000); const protocol = useSSL ? 'https' : 'http'; const res = await fetch(protocol + '://localhost:' + port + '/status').catch(() => ({ok: false})); process.exit(res.ok ? 0 : 1)"
 
 CMD ["bun", "run", "development"]
