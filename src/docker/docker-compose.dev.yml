@@ -5,9 +5,10 @@ services:
       dockerfile: src/docker/Dockerfile.dev
     container_name: frostfire-assets-dev
     restart: always
-    network_mode: "host"
     env_file:
       - ../../.env.development
+    ports:
+      - "8000:8000"
     volumes:
       # For relative ASSETS_PATH: prepend ../../ to resolve from project root
       # For absolute ASSETS_PATH: use as-is (e.g., C:/Users/... or /mnt/...)
