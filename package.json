@@ -5,7 +5,7 @@
   "private": true,
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@types/bun": "npm:bun-types@latest",
+    "@types/bun": "npm:bun-types@canary",
     "@types/eslint__js": "^9.14.0",
     "@types/node": "npm:@types/node@latest",
     "eslint": "^10.9.1",
