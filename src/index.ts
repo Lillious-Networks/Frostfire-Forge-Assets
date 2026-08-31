@@ -32,6 +32,91 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "Content-Type"
 };
 
+function acceptsGzip(req: Request): boolean {
+  return (req.headers.get("accept-encoding") || "").includes("gzip");
+}
+
+// Cache of precomputed gzip-compressed map chunk payloads. /map-chunk is the
+// highest-volume browser endpoint (every client fetches dozens of chunks per
+// map load), and each miss costs layer slicing + JSON.stringify + gzipSync.
+// Keyed by map name + checksum so map edits invalidate naturally on write.
+const chunkCache = new Map<string, Uint8Array>();
+const CHUNK_CACHE_MAX_ENTRIES = 10000;
+
+function getChunkCacheKey(mapFile: string, checksum: string, chunkX: number, chunkY: number, chunkSize: number): string {
+  return `${mapFile}:${checksum}:${chunkX}:${chunkY}:${chunkSize}`;
+}
+
+function rememberChunk(key: string, data: Uint8Array) {
+  chunkCache.set(key, data);
+  if (chunkCache.size > CHUNK_CACHE_MAX_ENTRIES) {
+    const oldestKey = chunkCache.keys().next().value;
+    if (oldestKey !== undefined) chunkCache.delete(oldestKey);
+  }
+}
+
+function clearChunkCacheForMap(mapName: string) {
+  const mapFile = mapName.endsWith(".json") ? mapName : `${mapName}.json`;
+  const prefix = `${mapFile}:`;
+  for (const key of chunkCache.keys()) {
+    if (key.startsWith(prefix)) chunkCache.delete(key);
+  }
+}
+
+// Serialize one map chunk (tile layers sliced from the flat layer.data arrays)
+// to a JSON string. Returns null for invalid chunk parameters.
+function buildMapChunk(mapData: any, chunkX: number, chunkY: number, chunkSize: number): string | null {
+  if (!mapData || !Array.isArray(mapData.layers) || !Number.isInteger(chunkX) || !Number.isInteger(chunkY) || !Number.isInteger(chunkSize) || chunkSize <= 0) {
+    return null;
+  }
+
+  const startX = chunkX * chunkSize;
+  const startY = chunkY * chunkSize;
+
+  const chunk = {
+    chunkX,
+    chunkY,
+    width: chunkSize,
+    height: chunkSize,
+    layers: [] as any[]
+  };
+
+  mapData.layers.forEach((layer: any, index: number) => {
+    if (layer.type === "tilelayer" && layer.data) {
+      const chunkLayerData: number[] = [];
+
+      for (let y = 0; y < chunkSize; y++) {
+        for (let x = 0; x < chunkSize; x++) {
+          const mapX = startX + x;
+          const mapY = startY + y;
+          const mapIndex = mapY * mapData.width + mapX;
+
+          if (mapX >= 0 && mapX < mapData.width && mapY >= 0 && mapY < mapData.height && mapIndex < layer.data.length) {
+            chunkLayerData.push(layer.data[mapIndex]);
+          } else {
+            chunkLayerData.push(0);
+          }
+        }
+      }
+
+      let zIndex = layer.zIndex;
+      if (zIndex === undefined) {
+        zIndex = index;
+      }
+
+      chunk.layers.push({
+        name: layer.name,
+        zIndex: zIndex,
+        data: chunkLayerData,
+        width: chunkSize,
+        height: chunkSize
+      });
+    }
+  });
+
+  return JSON.stringify(chunk);
+}
+
 // Fallback icon served when a requested icon/sprite image does not exist.
 // The X-Asset-Fallback header lets clients detect the fallback and opt out
 // of rendering it (e.g. spell projectiles).
@@ -84,6 +169,20 @@ const routes = {
         if (relativePath.startsWith("..")) {
           return new Response(JSON.stringify({ error: "Invalid tileset name" }), {
             status: 400,
+            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" }
+          });
+        }
+
+        // Serve from the startup cache first (tilesets are gzip'd at load time,
+        // so this avoids disk I/O + recompression on every request).
+        const cachedTilesets = await assetCache.get("tilesets") as any[] | null;
+        const cachedTileset = cachedTilesets?.find((t: any) => t.name === name);
+        if (cachedTileset?.data) {
+          return new Response(JSON.stringify({
+            name: name,
+            data: cachedTileset.data
+          }), {
+            status: 200,
             headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" }
           });
         }
@@ -143,55 +242,53 @@ const routes = {
           });
         }
 
-        // Extract chunk from map data
-        const mapData = map.data;
-        const startX = chunkX * chunkSize;
-        const startY = chunkY * chunkSize;
+        const wantGzip = acceptsGzip(req);
 
-        const chunk = {
-          chunkX,
-          chunkY,
-          width: chunkSize,
-          height: chunkSize,
-          layers: [] as any[]
-        };
-
-        // Extract chunk data from each layer
-        mapData.layers.forEach((layer: any, index: number) => {
-          if (layer.type === "tilelayer" && layer.data) {
-            const chunkLayerData: number[] = [];
-
-            for (let y = 0; y < chunkSize; y++) {
-              for (let x = 0; x < chunkSize; x++) {
-                const mapX = startX + x;
-                const mapY = startY + y;
-                const mapIndex = mapY * mapData.width + mapX;
-
-                if (mapX >= 0 && mapX < mapData.width && mapY >= 0 && mapY < mapData.height && mapIndex < layer.data.length) {
-                  chunkLayerData.push(layer.data[mapIndex]);
-                } else {
-                  chunkLayerData.push(0);
-                }
+        // Serve precomputed gzip payload when available (browser fetch
+        // transparently decompresses Content-Encoding: gzip).
+        if (wantGzip) {
+          const cacheKey = getChunkCacheKey(mapFile, map.checksum, chunkX, chunkY, chunkSize);
+          const cachedChunk = chunkCache.get(cacheKey);
+          if (cachedChunk) {
+            return new Response(cachedChunk, {
+              status: 200,
+              headers: {
+                ...CORS_HEADERS,
+                "Content-Encoding": "gzip",
+                "Vary": "Accept-Encoding"
               }
-            }
-
-            // Get zIndex from layer properties or use layer index as fallback
-            let zIndex = layer.zIndex;
-            if (zIndex === undefined) {
-              zIndex = index;
-            }
-
-            chunk.layers.push({
-              name: layer.name,
-              zIndex: zIndex,
-              data: chunkLayerData,
-              width: chunkSize,
-              height: chunkSize
             });
           }
-        });
 
-        return new Response(JSON.stringify(chunk), {
+          // Build the chunk (existing slicing logic), compress, and cache it.
+          const chunkPayload = buildMapChunk(map.data, chunkX, chunkY, chunkSize);
+          if (chunkPayload === null) {
+            return new Response(JSON.stringify({ error: "Invalid chunk parameters" }), {
+              status: 400,
+              headers: CORS_HEADERS
+            });
+          }
+          const gz = zlib.gzipSync(chunkPayload);
+          rememberChunk(cacheKey, gz);
+          return new Response(gz, {
+            status: 200,
+            headers: {
+              ...CORS_HEADERS,
+              "Content-Encoding": "gzip",
+              "Vary": "Accept-Encoding"
+            }
+          });
+        }
+
+        // Non-gzip client: build fresh (rare - all modern browsers send gzip)
+        const chunkPayload = buildMapChunk(map.data, chunkX, chunkY, chunkSize);
+        if (chunkPayload === null) {
+          return new Response(JSON.stringify({ error: "Invalid chunk parameters" }), {
+            status: 400,
+            headers: CORS_HEADERS
+          });
+        }
+        return new Response(chunkPayload, {
           status: 200,
           headers: CORS_HEADERS
         });
@@ -226,7 +323,21 @@ const routes = {
           }
         }
         log.info(`[AssetServer] Map sync for ${serverId}: ${outdatedMaps.length} outdated maps`);
-        return new Response(JSON.stringify({ success: true, outdatedMaps }), { status: 200, headers: CORS_HEADERS });
+        // Outdated maps carry full map data - this response can be megabytes.
+        // gzip cuts it 80-90%; Bun's fetch on the game server decompresses
+        // transparently, so no consumer changes are needed.
+        const payload = JSON.stringify({ success: true, outdatedMaps });
+        if (acceptsGzip(req)) {
+          return new Response(zlib.gzipSync(payload), {
+            status: 200,
+            headers: {
+              ...CORS_HEADERS,
+              "Content-Encoding": "gzip",
+              "Vary": "Accept-Encoding"
+            }
+          });
+        }
+        return new Response(payload, { status: 200, headers: CORS_HEADERS });
       } catch (error: any) {
         log.error(`Error in /map-checksums: ${error.message}`);
         return new Response(JSON.stringify({ error: "Invalid request body" }), { status: 400, headers: CORS_HEADERS });
@@ -255,6 +366,7 @@ const routes = {
           maps.push({ name: mapName, data: mapData, checksum: checksum });
         }
         await assetCache.set("maps", maps);
+        clearChunkCacheForMap(mapName);
         log.info(`[AssetServer] Map updated: ${mapName} by server ${serverId}`);
         return new Response(JSON.stringify({ success: true, checksum: checksum, message: "Map updated successfully" }), { status: 200, headers: CORS_HEADERS });
       } catch (error: any) {
@@ -308,6 +420,7 @@ const routes = {
         };
 
         await assetCache.set("maps", maps);
+        clearChunkCacheForMap(mapFile);
 
         // Persist changes to disk
         try {
@@ -454,6 +567,7 @@ const routes = {
         };
 
         await assetCache.set("maps", maps);
+        clearChunkCacheForMap(mapFile);
         log.info(`[AssetServer] Updated cache for map: ${mapFile}`);
 
         // Persist changes to disk
