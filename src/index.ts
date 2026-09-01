@@ -20,7 +20,7 @@ if (process.env.HTTP_USE_SSL === "true") {
     console.error(`  Cert path: ${_cert || "(TLS_CERT_PATH not set)"} (exists: ${!!_cert && fs.existsSync(_cert)})`);
     console.error(`  Key path:  ${_key || "(TLS_KEY_PATH not set)"} (exists: ${!!_key && fs.existsSync(_key)})`);
   } else {
-    console.log(`[Asset Server] SSL enabled (HTTP/3 + HTTP/1.1 fallback)`);
+    console.log(`[Asset Server] SSL enabled (HTTP/3 + HTTP/2 fallback)`);
   }
 }
 const authKey = process.env.ASSET_SERVER_AUTH_KEY || process.env.GATEWAY_AUTH_KEY || "change-this-secret-key";
@@ -128,7 +128,11 @@ function serveMissingIcon(): Response {
       return new Response(missingIconData, {
         status: 200,
         headers: {
-          "Cache-Control": "no-cache",
+          // Short TTL rather than no-cache: the placeholder is one small static
+          // image requested once per missing asset, so no-cache meant every
+          // missing sprite re-fetched it on every render. A few minutes still
+          // lets a genuinely-added asset show up quickly.
+          "Cache-Control": "public, max-age=300",
           "X-Asset-Fallback": "missing_icon",
           "Access-Control-Expose-Headers": "X-Asset-Fallback",
           ...CORS_HEADERS
@@ -832,6 +836,7 @@ Bun.serve({
     port: serverPort,
     development: false,
     reusePort: false,
+    http2: true,
   async fetch(req: Request, server: any) {
     const url = tryParseURL(req.url);
     if (!url) {

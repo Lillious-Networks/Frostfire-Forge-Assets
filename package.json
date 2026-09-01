@@ -10,7 +10,7 @@
     "@types/node": "npm:@types/node@latest",
     "eslint": "^10.9.1",
     "husky": "^9.1.7",
-    "typescript-eslint": "^8.68.0"
+    "typescript-eslint": "^8.69.0"
   },
   "peerDependencies": {
     "typescript": "^5.9.3"
