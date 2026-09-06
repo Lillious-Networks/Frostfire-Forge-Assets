@@ -3,26 +3,13 @@ import log from "./modules/logger";
 import path from "path";
 import fs from "fs";
 import zlib from "zlib";
+import { startHttpsServers, getInternalServerOptions } from "./modules/https_servers";
 
 // Load asset loader
 import { initializeAssets, applyChunksWithRebase, getAssetsPath, normalizeInfiniteMap } from "./modules/assetloader";
 import assetCache from "./services/assetCache";
 
 
-const _cert = process.env.TLS_CERT_PATH;
-const _key = process.env.TLS_KEY_PATH;
-const _ca = process.env.TLS_CA_PATH;
-const _https = process.env.HTTP_USE_SSL === "true" && !!_cert && !!_key && fs.existsSync(_cert) && fs.existsSync(_key);
-
-if (process.env.HTTP_USE_SSL === "true") {
-  if (!_https) {
-    console.error("[Asset Server] SSL requested but certificates not found.");
-    console.error(`  Cert path: ${_cert || "(TLS_CERT_PATH not set)"} (exists: ${!!_cert && fs.existsSync(_cert)})`);
-    console.error(`  Key path:  ${_key || "(TLS_KEY_PATH not set)"} (exists: ${!!_key && fs.existsSync(_key)})`);
-  } else {
-    console.log(`[Asset Server] SSL enabled (HTTP/3 + HTTP/2 fallback)`);
-  }
-}
 const authKey = process.env.ASSET_SERVER_AUTH_KEY || process.env.GATEWAY_AUTH_KEY || "change-this-secret-key";
 
 const CORS_HEADERS = {
@@ -829,14 +816,14 @@ const routes = {
   },
 } as Record<string, any>;
 
-const serverPort = _https ? (parseInt(process.env.WEBSRV_PORTSSL || "") || 443) : (parseInt(process.env.WEBSRV_PORT || "") || 80);
+const serverPort = parseInt(process.env.WEBSRV_INTERNAL_PORT || "") || 8082;
 
 Bun.serve({
-    hostname: "0.0.0.0",
+    hostname: "127.0.0.1",
     port: serverPort,
     development: false,
-    reusePort: false,
-    http2: true,
+    reusePort: true,
+    ...getInternalServerOptions(process.env.TLS_CERT_PATH!, process.env.TLS_KEY_PATH!, process.env.TLS_CA_PATH),
   async fetch(req: Request, server: any) {
     const url = tryParseURL(req.url);
     if (!url) {
@@ -905,36 +892,19 @@ Bun.serve({
     // Unknown routes redirect to homepage
     return Response.redirect("/", 301);
   },
-  ...(_https ? {
-      tls: {
-        cert: _ca && fs.existsSync(_ca)
-          ? fs.readFileSync(_cert) + "\n" + fs.readFileSync(_ca)
-          : fs.readFileSync(_cert),
-        key: fs.readFileSync(_key),
-      },
-      http3: true,
-    }
-  : {}),
 });
-// If HTTPS is enabled, also start an HTTP server that redirects to HTTPS
-if (_https) {
-  Bun.serve({
-    hostname: "0.0.0.0",
-    development: false,
-    reusePort: false,
-    port: process.env.WEBSRV_PORT || 80,
-    fetch(req: Request) {
-      const url = tryParseURL(req.url);
-      if (!url) {
-        return new Response(JSON.stringify({ message: "Invalid request" }), { status: 400 });
-      }
-      // Always redirect to https with same host/path/query
-      // If the port is 443, don't include it in the redirect
-      const port = process.env.WEBSRV_PORTSSL === "443" ? "" : `:${process.env.WEBSRV_PORTSSL || 443}`;
-      return Response.redirect(`https://${url.hostname}${port}${url.pathname}${url.search}`, 301);
-    }
-  });
-}
+
+startHttpsServers({
+  name: "Asset Server",
+  sslEnabled: process.env.HTTP_USE_SSL === "true",
+  httpPort: parseInt(process.env.WEBSRV_PORT || "") || 80,
+  httpsPort: parseInt(process.env.WEBSRV_PORTSSL || "") || 443,
+  internalPort: serverPort,
+  certPath: process.env.TLS_CERT_PATH,
+  keyPath: process.env.TLS_KEY_PATH,
+  caPath: process.env.TLS_CA_PATH,
+  log,
+});
 
 function tryParseURL(url: string) : URL | null {
   try {
@@ -948,4 +918,4 @@ function tryParseURL(url: string) : URL | null {
 await initializeAssets();
 
 const readyTimeMs = performance.now() - now;
-log.success(`Webserver started on port ${serverPort} (${_https ? "HTTPS" : "HTTP"}) - Ready in ${(readyTimeMs / 1000).toFixed(3)}s (${readyTimeMs.toFixed(0)}ms)`);
+log.success(`Asset Server ready in ${(readyTimeMs / 1000).toFixed(3)}s (${readyTimeMs.toFixed(0)}ms)`);
