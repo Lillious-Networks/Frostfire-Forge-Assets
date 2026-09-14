@@ -1,7 +1,6 @@
 const now = performance.now();
 import log from "./modules/logger";
 import path from "path";
-import fs from "fs";
 import zlib from "zlib";
 import { startHttpsServers, getInternalServerOptions } from "./modules/https_servers";
 
@@ -18,6 +17,30 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type"
 };
+
+const CORS_AUDIO_ALLOW_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, HEAD, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Range",
+  "Access-Control-Expose-Headers": "Content-Range, Content-Length, Accept-Ranges",
+};
+
+// Extension -> MIME type for audio files served by /audio.
+const AUDIO_MIME_TYPES: Record<string, string> = {
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".ogg": "audio/ogg",
+  ".oga": "audio/ogg",
+  ".m4a": "audio/mp4",
+  ".webm": "audio/webm",
+  ".flac": "audio/flac",
+  ".opus": "audio/opus",
+};
+const ALLOWED_AUDIO_EXTENSIONS = Object.keys(AUDIO_MIME_TYPES);
+
+function getAudioMimeType(fileName: string): string {
+  return AUDIO_MIME_TYPES[path.extname(fileName).toLowerCase()] || "application/octet-stream";
+}
 
 function acceptsGzip(req: Request): boolean {
   return (req.headers.get("accept-encoding") || "").includes("gzip");
@@ -104,17 +127,38 @@ function buildMapChunk(mapData: any, chunkX: number, chunkY: number, chunkSize: 
   return JSON.stringify(chunk);
 }
 
+// Cache keys are flat names (no separators), so anything containing a path
+// separator, parent traversal, or null byte is never valid.
+function isUnsafeAssetName(name: string): boolean {
+  const trimmed = name.trim();
+  return trimmed === "" || trimmed.includes("\0") || trimmed.includes("..") || trimmed.includes("/") || trimmed.includes("\\");
+}
+
+// Decode a sprite/icon cache entry (stored at load time as gzip of base64 PNG bytes).
+function decodeCachedImage(data: string): Buffer {
+  const base64 = zlib.gunzipSync(Buffer.from(data, "base64")).toString("utf-8");
+  return Buffer.from(base64, "base64");
+}
+
+// Decode an audio cache entry (stored at load time as gzip of raw audio bytes).
+function decodeCachedAudio(data: string): Buffer {
+  return zlib.gunzipSync(Buffer.from(data, "base64"));
+}
+
 // Fallback icon served when a requested icon/sprite image does not exist.
+// Served from the startup cache (the "missing_icon" entry of the icons cache).
 // The X-Asset-Fallback header lets clients detect the fallback and opt out
 // of rendering it (e.g. spell projectiles).
-function serveMissingIcon(): Response {
+async function serveMissingIcon(): Promise<Response> {
   try {
-    const missingIconPath = path.resolve(getAssetsPath(), "icons", "missing_icon.png");
-    if (fs.existsSync(missingIconPath)) {
-      const missingIconData = fs.readFileSync(missingIconPath);
+    const icons = await assetCache.get("icons") as any[] | null;
+    const entry = icons?.find((i: any) => i.name === "missing_icon");
+    if (entry?.data) {
+      const missingIconData = decodeCachedImage(entry.data);
       return new Response(missingIconData, {
         status: 200,
         headers: {
+          "Content-Type": "image/png",
           // Short TTL rather than no-cache: the placeholder is one small static
           // image requested once per missing asset, so no-cache meant every
           // missing sprite re-fetched it on every render. A few minutes still
@@ -122,7 +166,10 @@ function serveMissingIcon(): Response {
           "Cache-Control": "public, max-age=300",
           "X-Asset-Fallback": "missing_icon",
           "Access-Control-Expose-Headers": "X-Asset-Fallback",
-          ...CORS_HEADERS
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
+          "Content-Length": missingIconData.length.toString()
         }
       });
     }
@@ -133,6 +180,66 @@ function serveMissingIcon(): Response {
     status: 404,
     headers: CORS_HEADERS
   });
+}
+
+function parseRangeHeader(range: string | null, size: number): { start: number; end: number } | null {
+  if (!range) return null;
+  const match = /^bytes=(\d*)-(\d*)$/.exec(range.trim());
+  if (!match) return null;
+  const startStr = match[1] ?? "";
+  const endStr = match[2] ?? "";
+  let start = startStr === "" ? NaN : parseInt(startStr, 10);
+  let end = endStr === "" ? NaN : parseInt(endStr, 10);
+  if (Number.isNaN(start) && Number.isNaN(end)) return null;
+  if (Number.isNaN(start)) {
+    // Suffix range: last N bytes
+    start = Math.max(0, size - end);
+    end = size - 1;
+  } else if (Number.isNaN(end)) {
+    end = size - 1;
+  }
+  if (start < 0 || end < start || start >= size) return null;
+  end = Math.min(end, size - 1);
+  return { start, end };
+}
+
+// Serve a raw audio buffer with correct MIME type, ETag/conditional GET,
+// and Range (206 Partial Content) support so <audio> elements can seek.
+function serveAudioBuffer(req: Request, fileName: string, data: Buffer): Response {
+  const mime = getAudioMimeType(fileName);
+  const size = data.length;
+  const etag = `"${size}-${Buffer.from(fileName).toString("base64url")}"`;
+  const baseHeaders: Record<string, string> = {
+    "Content-Type": mime,
+    "Accept-Ranges": "bytes",
+    "Cache-Control": "public, max-age=31536000, immutable",
+    "Content-Length": size.toString(),
+    "ETag": etag,
+    ...CORS_AUDIO_ALLOW_HEADERS,
+  };
+
+  if (req.headers.get("if-none-match") === etag) {
+    return new Response(null, { status: 304, headers: baseHeaders });
+  }
+
+  if (req.method === "HEAD") {
+    return new Response(null, { status: 200, headers: baseHeaders });
+  }
+
+  const range = parseRangeHeader(req.headers.get("range"), size);
+  if (range) {
+    const chunk = data.subarray(range.start, range.end + 1);
+    return new Response(chunk, {
+      status: 206,
+      headers: {
+        ...baseHeaders,
+        "Content-Range": `bytes ${range.start}-${range.end}/${size}`,
+        "Content-Length": chunk.length.toString(),
+      },
+    });
+  }
+
+  return new Response(data, { status: 200, headers: baseHeaders });
 }
 
 const routes = {
@@ -152,20 +259,14 @@ const routes = {
       }
 
       try {
-        const tilesetDir = path.resolve(getAssetsPath(), "tilesets");
-        const tilesetPath = path.resolve(tilesetDir, name);
-
-        // Prevent path traversal attacks - ensure resolved path is within tilesets directory
-        const relativePath = path.relative(tilesetDir, tilesetPath);
-        if (relativePath.startsWith("..")) {
+        if (isUnsafeAssetName(name)) {
           return new Response(JSON.stringify({ error: "Invalid tileset name" }), {
             status: 400,
             headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" }
           });
         }
 
-        // Serve from the startup cache first (tilesets are gzip'd at load time,
-        // so this avoids disk I/O + recompression on every request).
+        // Serve from the startup cache only - everything is loaded into memory at boot.
         const cachedTilesets = await assetCache.get("tilesets") as any[] | null;
         const cachedTileset = cachedTilesets?.find((t: any) => t.name === name);
         if (cachedTileset?.data) {
@@ -178,22 +279,8 @@ const routes = {
           });
         }
 
-        if (!fs.existsSync(tilesetPath)) {
-          return new Response(JSON.stringify({ error: "Tileset not found" }), {
-            status: 404,
-            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" }
-          });
-        }
-
-        const tilesetData = fs.readFileSync(tilesetPath);
-        const compressedData = zlib.gzipSync(tilesetData);
-        const base64Data = compressedData.toString("base64");
-
-        return new Response(JSON.stringify({
-          name: name,
-          data: base64Data
-        }), {
-          status: 200,
+        return new Response(JSON.stringify({ error: "Tileset not found" }), {
+          status: 404,
           headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" }
         });
       } catch (error: any) {
@@ -706,28 +793,33 @@ const routes = {
       }
 
       try {
-        // Serve sprite PNG files directly from sprites directory
-        const spritePath = path.resolve(getAssetsPath(), "sprites", `${name}.png`);
-
-        // Prevent path traversal attacks
-        const relativePath = path.relative(path.resolve(getAssetsPath(), "sprites"), spritePath);
-        if (relativePath.startsWith("..")) {
+        // Cache keys omit the extension - accept it either way.
+        const key = name.trim().replace(/\.png$/i, "");
+        if (isUnsafeAssetName(key)) {
           return new Response(JSON.stringify({ error: "Invalid sprite name" }), {
             status: 400,
             headers: CORS_HEADERS
           });
         }
 
-        if (!fs.existsSync(spritePath)) {
+        // Serve from the startup cache only - everything is loaded into memory at boot.
+        const sprites = await assetCache.get("sprites") as any[] | null;
+        const entry = sprites?.find((s: any) => s.name === key);
+
+        if (!entry?.data) {
           return serveMissingIcon();
         }
 
-        const spriteData = fs.readFileSync(spritePath);
+        const spriteData = decodeCachedImage(entry.data);
         return new Response(spriteData, {
           status: 200,
           headers: {
+            "Content-Type": "image/png",
             "Cache-Control": "public, max-age=31536000",
-            ...CORS_HEADERS
+            "Content-Length": spriteData.length.toString(),
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type"
           }
         });
       } catch (error: any) {
@@ -752,31 +844,117 @@ const routes = {
       }
 
       try {
-        const iconPath = path.resolve(getAssetsPath(), "icons", `${name}.png`);
-
-        // Prevent path traversal attacks
-        const relativePath = path.relative(path.resolve(getAssetsPath(), "icons"), iconPath);
-        if (relativePath.startsWith("..")) {
+        // Cache keys omit the extension - accept it either way.
+        const key = name.trim().replace(/\.png$/i, "");
+        if (isUnsafeAssetName(key)) {
           return new Response(JSON.stringify({ error: "Invalid icon name" }), {
             status: 400,
             headers: CORS_HEADERS
           });
         }
 
-        if (!fs.existsSync(iconPath)) {
+        // Serve from the startup cache only - everything is loaded into memory at boot.
+        const icons = await assetCache.get("icons") as any[] | null;
+        const entry = icons?.find((i: any) => i.name === key);
+
+        if (!entry?.data) {
           return serveMissingIcon();
         }
 
-        const iconData = fs.readFileSync(iconPath);
+        const iconData = decodeCachedImage(entry.data);
         return new Response(iconData, {
           status: 200,
           headers: {
+            "Content-Type": "image/png",
             "Cache-Control": "public, max-age=31536000",
-            ...CORS_HEADERS
+            "Content-Length": iconData.length.toString(),
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type"
           }
         });
       } catch (error: any) {
         log.error(`Error serving icon: ${error.message}`);
+        return new Response(JSON.stringify({ error: "Internal server error" }), {
+          status: 500,
+          headers: CORS_HEADERS
+        });
+      }
+    }
+  },
+  "/audio": {
+    GET: async (req: Request) => {
+      const url = new URL(req.url);
+      const name = url.searchParams.get("name");
+
+      if (!name) {
+        return new Response(JSON.stringify({ error: "Missing audio name" }), {
+          status: 400,
+          headers: CORS_HEADERS
+        });
+      }
+
+      try {
+        const cleaned = name.trim().replace(/^\/+/, "");
+        if (isUnsafeAssetName(cleaned)) {
+          return new Response(JSON.stringify({ error: "Invalid audio name" }), {
+            status: 400,
+            headers: CORS_HEADERS
+          });
+        }
+
+        const reqExt = path.extname(cleaned).toLowerCase();
+        if (reqExt && !ALLOWED_AUDIO_EXTENSIONS.includes(reqExt)) {
+          return new Response(JSON.stringify({ error: "Invalid audio name" }), {
+            status: 400,
+            headers: CORS_HEADERS
+          });
+        }
+
+        // Serve from the startup cache only (stored as base64 gzip).
+        // Accepts names with or without extension (e.g. "theme", "theme.mp3").
+        const cached = await assetCache.get("audio") as any[] | null;
+        const stemOf = (n: string) => n.replace(/\.[^.]*$/, "").toLowerCase();
+        const entry = cached?.find((a: any) =>
+          a.name === cleaned ||
+          a.name.toLowerCase() === cleaned.toLowerCase() ||
+          stemOf(a.name) === stemOf(cleaned)
+        );
+        if (!entry?.data) {
+          return new Response(JSON.stringify({ error: "Audio not found" }), {
+            status: 404,
+            headers: CORS_HEADERS
+          });
+        }
+
+        const raw = decodeCachedAudio(entry.data);
+        return serveAudioBuffer(req, entry.name, raw);
+      } catch (error: any) {
+        log.error(`Error serving audio: ${error.message}`);
+        return new Response(JSON.stringify({ error: "Internal server error" }), {
+          status: 500,
+          headers: CORS_HEADERS
+        });
+      }
+    },
+    HEAD: async (req: Request) => {
+      // Reuse GET logic - serveAudioBuffer returns headers-only for HEAD.
+      return (routes["/audio"] as any).GET(req);
+    }
+  },
+  "/audios": {
+    GET: async () => {
+      try {
+        // List from the startup cache only.
+        const cached = await assetCache.get("audio") as any[] | null;
+        return new Response(JSON.stringify({
+          audio: (cached ?? []).map((a: any) => ({ name: a.name, mime: getAudioMimeType(a.name) }))
+        }), {
+          status: 200,
+          headers: CORS_HEADERS
+        });
+      } catch (error: any) {
+        log.error(`Error listing audio: ${error.message}`);
         return new Response(JSON.stringify({ error: "Internal server error" }), {
           status: 500,
           headers: CORS_HEADERS
@@ -841,8 +1019,8 @@ Bun.serve({
         status: 204,
         headers: {
           "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization",
+          "Access-Control-Allow-Methods": "GET, HEAD, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization, Range",
           "Access-Control-Max-Age": "86400",
         },
       });
@@ -861,11 +1039,12 @@ Bun.serve({
 
     // If route exists, handle it
     if (route) {
-      return route[req.method as keyof typeof route]?.(req);
+      const handler = route[req.method as keyof typeof route] ?? (req.method === "HEAD" ? route["GET"] : undefined);
+      if (handler) return handler(req);
     }
 
     // API routes should NOT fall back to static file serving
-    const apiRoutes = ["/icon", "/sprite", "/sprite-sheet-template", "/sprite-sheet-image", "/tileset", "/map-chunk"];
+    const apiRoutes = ["/icon", "/sprite", "/sprite-sheet-template", "/sprite-sheet-image", "/tileset", "/map-chunk", "/audio", "/audios"];
     if (apiRoutes.includes(url.pathname)) {
       return new Response(JSON.stringify({ error: "Route not found" }), {
         status: 404,
@@ -873,22 +1052,8 @@ Bun.serve({
       });
     }
 
-    // Try to serve as static file from assets directory
-    try {
-      const assetPath = path.join(getAssetsPath(), url.pathname.replace(/^\//, ""));
-
-      if (fs.existsSync(assetPath) && fs.statSync(assetPath).isFile()) {
-        const fileContent = fs.readFileSync(assetPath);
-        return new Response(fileContent, {
-          status: 200,
-          headers: { "Content-Type": "application/octet-stream" }
-        });
-      }
-    } catch (e) {
-      log.error(`Static file error: ${e}`);
-    }
-
-    // Assets (map-chunk, tileset, music) should be requested via WebSocket from game server
+    // All assets are served from the startup cache via the routes above -
+    // there is intentionally no static file fallback to disk.
     // Unknown routes redirect to homepage
     return Response.redirect("/", 301);
   },

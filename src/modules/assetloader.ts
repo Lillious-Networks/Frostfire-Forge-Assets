@@ -55,6 +55,7 @@ const ANIMATIONS_PATH = "animations";
 const SPRITESHEETS_PATH = "spritesheets";
 const SPRITES_PATH = "sprites";
 const ICONS_PATH = "icons";
+const AUDIO_PATH = "audio";
 
 const assetLoadingStartTime = performance.now();
 
@@ -62,12 +63,16 @@ async function loadTilesets() {
   const now = performance.now();
   const tilesets = [] as TilesetData[];
   const tilesetDir = path.join(assetPath, TILESETS_PATH);
+  // .json = Tiled tileset definitions; images (.png, ...) are fetched by the
+  // browser client via /tileset?name=<image> (gateway map.ts loadTilesets),
+  // so they must be cached too now that serving is cache-only.
+  const allowedExtensions = [".json", ".png", ".jpg", ".jpeg", ".webp"];
 
   if (!fs.existsSync(tilesetDir)) {
     throw new Error(`Tilesets directory not found at ${tilesetDir}`);
   }
 
-  const tilesetFiles = fs.readdirSync(tilesetDir);
+  const tilesetFiles = fs.readdirSync(tilesetDir).filter(file => allowedExtensions.includes(path.extname(file).toLowerCase()));
   tilesetFiles.forEach((file) => {
 
     const tilesetData = fs.readFileSync(path.join(tilesetDir, file));
@@ -97,7 +102,48 @@ async function loadTilesets() {
     }))
   );
 
-  log.success(`Loaded ${tilesets.length} tileset(s) in ${(performance.now() - now).toFixed(2)}ms`);
+  const imageCount = tilesets.filter(t => path.extname(t.name).toLowerCase() !== ".json").length;
+  log.success(`Loaded ${tilesets.length} tileset file(s) (${tilesets.length - imageCount} definitions, ${imageCount} images) in ${(performance.now() - now).toFixed(2)}ms`);
+}
+
+async function loadAudio() {
+  const audioCache = [] as AudioData[];
+  const now = performance.now();
+  const audioDir = path.join(assetPath, AUDIO_PATH);
+
+  const allowedExtensions = [".mp3", ".wav", ".ogg", ".oga", ".m4a", ".webm", ".flac", ".opus"];
+
+  if (!fs.existsSync(audioDir)) {
+    log.warn(`Audio directory not found at ${audioDir}, skipping audio loading`);
+    await assetCache.add("audio", []);
+    return;
+  }
+  const audioFiles = fs.readdirSync(audioDir).filter(file => allowedExtensions.includes(path.extname(file).toLowerCase()));
+
+  const filteredAudioEntries = audioFiles
+    .map(file => ({ file, buffer: fs.readFileSync(path.join(audioDir, file)) }))
+    .filter(({ file, buffer }) => buffer !== undefined && allowedExtensions.includes(path.extname(file).toLowerCase()))
+    .map(({ file, buffer }) => ({ file, buffer: buffer! }));
+
+  filteredAudioEntries.forEach(({ file, buffer }) => {
+    const compressedData = zlib.gzipSync(buffer);
+    const originalSize = buffer.length;
+    const compressedSize = compressedData.length;
+    const ratio = (originalSize / compressedSize).toFixed(2);
+    const savings = (((originalSize - compressedSize) / originalSize) * 100).toFixed(2);
+
+    audioCache.push({ name: file, data: compressedData.toString("base64") });
+
+    log.debug(`Loaded audio: ${file}`);
+    log.debug(`Compressed audio: ${file}
+  - Original: ${originalSize} bytes
+  - Compressed: ${compressedSize} bytes
+  - Compression Ratio: ${ratio}x
+  - Compression Savings: ${savings}%`);
+  });
+
+  await assetCache.add("audio", audioCache);
+  log.success(`Loaded ${filteredAudioEntries.length} audio file(s) in ${(performance.now() - now).toFixed(2)}ms`);
 }
 
 async function loadSpriteSheetTemplates() {
@@ -106,6 +152,7 @@ async function loadSpriteSheetTemplates() {
 
   const animationsDir = path.join(assetPath, ANIMATIONS_PATH);
   const spriteSheetDir = path.join(assetPath, SPRITESHEETS_PATH);
+  const allowedExtensions = [".json"];
 
   if (!fs.existsSync(animationsDir)) {
     log.warn(`Animations directory not found at ${animationsDir}, skipping animation template loading`);
@@ -119,7 +166,7 @@ async function loadSpriteSheetTemplates() {
     return;
   }
 
-  const templateFiles = fs.readdirSync(animationsDir).filter(file => file.endsWith(".json"));
+  const templateFiles = fs.readdirSync(animationsDir).filter(file => allowedExtensions.includes(path.extname(file).toLowerCase()));
 
   if (templateFiles.length === 0) {
     log.warn(`No animation templates found in ${animationsDir}`);
@@ -620,6 +667,7 @@ export async function initializeAssets() {
   await loadSpriteSheetTemplates();
   await loadSprites();
   await loadIcons();
+  await loadAudio();
   loadAllMaps();
 
   const assetLoadingEndTime = performance.now();
@@ -653,4 +701,9 @@ interface MapData {
   data: any;
   compressed: Buffer;
   checksum: string;
+}
+
+interface AudioData {
+  name: string;
+  data: string;
 }
