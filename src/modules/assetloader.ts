@@ -146,6 +146,34 @@ async function loadAudio() {
   log.success(`Loaded ${filteredAudioEntries.length} audio file(s) in ${(performance.now() - now).toFixed(2)}ms`);
 }
 
+/** Folder -> slot name. Armor folders are named after the item slot; bodies/heads come from the player folder. */
+const SLOT_BY_FOLDER: Record<string, string> = {
+  helmet: "helmet",
+  shoulderguards: "shoulderguards",
+  necklace: "neck",
+  neck: "neck",
+  gloves: "hands",
+  chestplate: "chest",
+  boots: "feet",
+  pants: "legs",
+  weapon: "weapon",
+  bodies: "body",
+  heads: "head",
+  mounts: "mount",
+};
+
+function slotFromPath(relativePath: string, templateFile?: string): string {
+  const parts = relativePath.split(/[\\/]/).slice(0, -1);
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const slot = SLOT_BY_FOLDER[(parts[i] ?? "").toLowerCase()];
+    if (slot) return slot;
+  }
+  const name = (templateFile || relativePath).toLowerCase();
+  if (name.includes("body")) return "body";
+  if (name.includes("head")) return "head";
+  return "other";
+}
+
 async function loadSpriteSheetTemplates() {
   const now = performance.now();
   const templates = [] as SpriteSheetTemplate[];
@@ -206,7 +234,8 @@ async function loadSpriteSheetTemplates() {
     templates.push({
       name: file.replace(".json", ""),
       template: templateJson,
-      image: imageBuffer
+      image: imageBuffer,
+      slot: slotFromPath(pngFile, file)
     });
   });
 
@@ -268,7 +297,8 @@ async function loadSpriteSheetTemplates() {
     templates.push({
       name: filename,
       template: templateToUse,
-      image: imageBuffer
+      image: imageBuffer,
+      slot: slotFromPath(pngFile)
     });
 
     let templateName = 'none';
@@ -684,6 +714,8 @@ interface SpriteSheetTemplate {
   name: string;
   template: string | null;
   image: Buffer | null;
+  /** Equipment slot / kind, from the folder the image lives in. Lets editors browse by slot. */
+  slot: string;
 }
 
 interface SpriteData {

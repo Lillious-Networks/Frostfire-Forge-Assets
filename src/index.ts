@@ -962,6 +962,26 @@ const routes = {
       }
     }
   },
+  "/icons": {
+    GET: async () => {
+      try {
+        // Names only; editors fetch each image from /icon?name=...
+        const cached = await assetCache.get("icons") as any[] | null;
+        return new Response(JSON.stringify({
+          icons: (cached ?? []).map((i: any) => ({ name: i.name }))
+        }), {
+          status: 200,
+          headers: CORS_HEADERS
+        });
+      } catch (error: any) {
+        log.error(`Error listing icons: ${error.message}`);
+        return new Response(JSON.stringify({ error: "Internal server error" }), {
+          status: 500,
+          headers: CORS_HEADERS
+        });
+      }
+    }
+  },
   "/sprite-sheets": {
     GET: async (req: Request) => {
       try {
@@ -973,8 +993,21 @@ const routes = {
           });
         }
 
+        // Equipment sheets are strips of frames; editors show the matching item
+        // icon instead when one exists ("wooden staff" -> "wooden_staff").
+        const icons = (await assetCache.get("icons") as any[]) || [];
+        const iconNames = new Set(icons.map((i: any) => String(i.name).toLowerCase()));
+        const iconFor = (name: string): string | null => {
+          for (const candidate of [name, name.replace(/ /g, "_"), name.replace(/_/g, " ")]) {
+            if (iconNames.has(candidate.toLowerCase())) return candidate;
+          }
+          return null;
+        };
+
         const spriteSheets = templates.map((t: any) => ({
           name: t.name,
+          slot: t.slot || "other",
+          icon: iconFor(t.name),
           hasTemplate: t.template !== null,
           hasImage: t.image !== null
         }));
