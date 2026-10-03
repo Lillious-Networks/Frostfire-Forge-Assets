@@ -270,13 +270,24 @@ const routes = {
         const cachedTilesets = await assetCache.get("tilesets") as any[] | null;
         const cachedTileset = cachedTilesets?.find((t: any) => t.name === name);
         if (cachedTileset?.data) {
+          // Revalidated on every load (no-cache + ETag = the file's content hash): a tileset edited in place under the same
+          // name is picked up after a restart, an unchanged one costs a 304. The gateway's service worker no longer keeps
+          // /tileset (its cache-first copy served the old image on every normal reload).
+          const etag = `"${cachedTileset.version ?? ""}"`;
+          const headers = {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-cache",
+            ...(cachedTileset.version ? { "ETag": etag } : {}),
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Expose-Headers": "ETag",
+          };
+          if (cachedTileset.version && req.headers.get("If-None-Match") === etag) return new Response(null, { status: 304, headers });
           return new Response(JSON.stringify({
             name: name,
             data: cachedTileset.data
-          }), {
-            status: 200,
-            headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" }
-          });
+          }), { status: 200, headers });
         }
 
         return new Response(JSON.stringify({ error: "Tileset not found" }), {
@@ -831,6 +842,39 @@ const routes = {
       }
     }
   },
+  // The baked full-map image of a map (maps/<map>.worldmap.png): the game's world map view. Revalidated by version.
+  "/worldmap": {
+    GET: async (req: Request) => {
+      const url = new URL(req.url);
+      const key = (url.searchParams.get("name") || "").trim().replace(/\.json$/i, "");
+      if (!key || isUnsafeAssetName(key)) {
+        return new Response(JSON.stringify({ error: "Invalid map name" }), { status: 400, headers: CORS_HEADERS });
+      }
+      try {
+        const worldMaps = await assetCache.get("worldmaps") as any[] | null;
+        const entry = worldMaps?.find((m: any) => m.name === key);
+        if (!entry?.data) {
+          return new Response(JSON.stringify({ error: "World map not found" }), { status: 404, headers: CORS_HEADERS });
+        }
+        const etag = `"${entry.version}"`;
+        const headers = {
+          "Content-Type": "image/png",
+          "Cache-Control": "public, max-age=0, must-revalidate",
+          "ETag": etag,
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type",
+          "Access-Control-Expose-Headers": "ETag",
+        };
+        if (req.headers.get("If-None-Match") === etag) return new Response(null, { status: 304, headers });
+        const png = Buffer.from(entry.data, "base64");
+        return new Response(png, { status: 200, headers: { ...headers, "Content-Length": png.length.toString() } });
+      } catch (error: any) {
+        log.error(`Error serving world map: ${error.message}`);
+        return new Response(JSON.stringify({ error: "Internal server error" }), { status: 500, headers: CORS_HEADERS });
+      }
+    }
+  },
   "/icon": {
     GET: async (req: Request) => {
       const url = new URL(req.url);
@@ -1077,7 +1121,7 @@ Bun.serve({
     }
 
     // API routes should NOT fall back to static file serving
-    const apiRoutes = ["/icon", "/sprite", "/sprite-sheet-template", "/sprite-sheet-image", "/tileset", "/map-chunk", "/audio", "/audios"];
+    const apiRoutes = ["/worldmap", "/icon", "/sprite", "/sprite-sheet-template", "/sprite-sheet-image", "/tileset", "/map-chunk", "/audio", "/audios"];
     if (apiRoutes.includes(url.pathname)) {
       return new Response(JSON.stringify({ error: "Route not found" }), {
         status: 404,

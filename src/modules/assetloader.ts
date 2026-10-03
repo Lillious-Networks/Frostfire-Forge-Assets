@@ -4,6 +4,7 @@ import log from "./logger";
 import assetCache from "../services/assetCache";
 import zlib from "zlib";
 import crypto from "crypto";
+import { TilesetImages, bakeWorldMap } from "./worldmap";
 
 // Load assets path from environment variable or use default
 function getAssetPath(): string {
@@ -91,14 +92,17 @@ async function loadTilesets() {
   - Compression Ratio: ${ratio}x
   - Compression Savings: ${savings}%`);
 
-    tilesets.push({ name: file, data: compressedData });
+    // version: a content hash of the file, the /tileset ETag (a tileset edited in place under the same name gets a new
+    // one, so the browser's revalidation picks the new image up after a restart)
+    tilesets.push({ name: file, data: compressedData, version: crypto.createHash("sha256").update(tilesetData).digest("hex").slice(0, 16) });
   });
 
   await assetCache.add(
     "tilesets",
     tilesets.map(t => ({
       name: t.name,
-      data: t.data.toString("base64")
+      data: t.data.toString("base64"),
+      version: t.version
     }))
   );
 
@@ -397,6 +401,44 @@ async function loadIcons() {
 
   await assetCache.add("icons", icons);
   log.success(`Loaded ${icons.length} icon(s) in ${(performance.now() - now).toFixed(2)}ms`);
+}
+
+/**
+ * Baked full-map images (maps/<map>.worldmap.png, one pixel per tile; the map generator writes them beside the map):
+ * the game's world map view. Cached as raw PNG bytes (base64) with a version (file mtime) for revalidation.
+ */
+// The world map images (the game's full-map view, M): baked in memory at startup for every loaded map
+// (modules/worldmap.ts), so they always match the maps and tilesets on disk. A hand-baked <map>.worldmap.png in
+// the maps folder is only used for a map whose bake failed. Nothing is written to disk.
+async function loadWorldMaps() {
+  const now = performance.now();
+  const mapDir = path.join(assetPath, MAPS_PATH);
+  const worldMaps: { name: string; data: string; version: string }[] = [];
+  const maps = (await assetCache.get("maps") as MapData[] | null) ?? [];
+  const images = new TilesetImages(path.join(assetPath, TILESETS_PATH));
+  let baked = 0;
+  for (const map of maps) {
+    const name = map.name.replace(/\.json$/i, "");
+    try {
+      const png = bakeWorldMap(map.data, images);
+      worldMaps.push({ name, data: png.toString("base64"), version: crypto.createHash("sha256").update(png).digest("hex").slice(0, 16) });
+      baked++;
+    } catch (e: any) {
+      log.warn(`Could not bake the world map of ${map.name}: ${e?.message ?? e}`);
+    }
+  }
+  let fromFiles = 0;
+  if (fs.existsSync(mapDir)) {
+    for (const file of fs.readdirSync(mapDir).filter(f => f.toLowerCase().endsWith(".worldmap.png"))) {
+      const name = file.slice(0, -".worldmap.png".length);
+      if (worldMaps.some(m => m.name === name)) continue;
+      const full = path.join(mapDir, file);
+      worldMaps.push({ name, data: fs.readFileSync(full).toString("base64"), version: String(Math.floor(fs.statSync(full).mtimeMs)) });
+      fromFiles++;
+    }
+  }
+  await assetCache.add("worldmaps", worldMaps);
+  log.success(`Baked ${baked} world map image(s)${fromFiles ? ` (+${fromFiles} from file)` : ""} in ${(performance.now() - now).toFixed(2)}ms`);
 }
 
 function loadAllMaps() {
@@ -699,6 +741,7 @@ export async function initializeAssets() {
   await loadIcons();
   await loadAudio();
   loadAllMaps();
+  await loadWorldMaps();
 
   const assetLoadingEndTime = performance.now();
   const totalAssetLoadingTime = (assetLoadingEndTime - assetLoadingStartTime).toFixed(2);
@@ -708,6 +751,7 @@ export async function initializeAssets() {
 interface TilesetData {
   name: string;
   data: Buffer;
+  version: string;
 }
 
 interface SpriteSheetTemplate {
