@@ -1026,6 +1026,26 @@ const routes = {
       }
     }
   },
+  "/sprites": {
+    GET: async () => {
+      try {
+        // Names only; the particle editor's image list fetches each image from /sprite?name=...
+        const cached = await assetCache.get("sprites") as any[] | null;
+        return new Response(JSON.stringify({
+          sprites: (cached ?? []).map((s: any) => ({ name: s.name }))
+        }), {
+          status: 200,
+          headers: CORS_HEADERS
+        });
+      } catch (error: any) {
+        log.error(`Error listing sprites: ${error.message}`);
+        return new Response(JSON.stringify({ error: "Internal server error" }), {
+          status: 500,
+          headers: CORS_HEADERS
+        });
+      }
+    }
+  },
   "/sprite-sheets": {
     GET: async (req: Request) => {
       try {
@@ -1121,7 +1141,7 @@ Bun.serve({
     }
 
     // API routes should NOT fall back to static file serving
-    const apiRoutes = ["/worldmap", "/icon", "/sprite", "/sprite-sheet-template", "/sprite-sheet-image", "/tileset", "/map-chunk", "/audio", "/audios"];
+    const apiRoutes = ["/worldmap", "/icon", "/sprite", "/sprite-sheet-template", "/sprite-sheet-image", "/tileset", "/map-chunk", "/audio", "/audios", "/sprites"];
     if (apiRoutes.includes(url.pathname)) {
       return new Response(JSON.stringify({ error: "Route not found" }), {
         status: 404,
