@@ -96,6 +96,15 @@ Maps are stored as JSON files and can be edited through the game's tile editor. 
 
 This enables collaborative world building with instant persistence and real-time synchronization across game servers.
 
+### World Maps
+
+A map too large to keep as one JSON file (up to 10240 x 10240 tiles) is a `.world` directory in the maps folder: a `manifest.json`, the collision and no-PvP data, and the tiles in packs of chunks. It is known by its directory's name, so `overworld.world` is served as the map `overworld`, and it cannot share a name with a `.json` map in the same folder.
+
+- `/map-chunk` answers for a world exactly as it does for a JSON map, reading only the packs asked for
+- The game server asks `/world-list` and `/world-file` for a world's manifest and its collision and no-PvP data: the tiles stay here
+- Tile editor saves (`/save-map-chunks`, `/save-map-properties`) rewrite only the packs touched, and a save cut short is repaired when the server next starts
+- `/worldmap?name=` serves a world's map image baked at a reduced scale, and `/worldmap?name=&rx=&ry=` a full-detail piece of it, 1024 tiles a side
+
 ---
 
 ## ⚙️ Environment Variables
@@ -249,7 +258,7 @@ bun run docker:prod:down        # Stop prod container
 
 ### Authentication
 
-Write endpoints (`/update-map`, `/save-map-chunks`, `/save-map-properties`, `/map-checksums`) require the `authKey` field in the request body to match the `ASSET_SERVER_AUTH_KEY` environment variable. Read endpoints are open.
+Write endpoints (`/update-map`, `/save-map-chunks`, `/save-map-properties`, `/map-checksums`) and the game server's world sync (`/world-list`, `/world-file`) require the `authKey` field in the request body to match the `ASSET_SERVER_AUTH_KEY` environment variable. Read endpoints are open.
 
 **Example:**
 ```bash

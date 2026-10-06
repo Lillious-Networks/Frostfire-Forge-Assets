@@ -4,7 +4,9 @@ import log from "./logger";
 import assetCache from "../services/assetCache";
 import zlib from "zlib";
 import crypto from "crypto";
-import { TilesetImages, bakeWorldMap } from "./worldmap";
+import os from "os";
+import { TilesetImages, bakeWorldMap, bakeChunkedWorldMap } from "./worldmap";
+import { loadWorlds, listWorlds, readChunkTiles, type World } from "./worldstore";
 
 // Load assets path from environment variable or use default
 function getAssetPath(): string {
@@ -410,6 +412,48 @@ async function loadIcons() {
 // The world map images (the game's full-map view, M): baked in memory at startup for every loaded map
 // (modules/worldmap.ts), so they always match the maps and tilesets on disk. A hand-baked <map>.worldmap.png in
 // the maps folder is only used for a map whose bake failed. Nothing is written to disk.
+// A world's bake takes seconds (the 10240 x 10240 continent: about 10), so the image is kept between starts in the
+// system's temp folder, under a name made of everything it depends on: the world's manifest (which names every
+// pack's content), its tileset images and this bake's version. Nothing is written to the assets folder.
+const WORLD_BAKE_VERSION = 1;
+function bakeWorldCached(world: World, images: TilesetImages): Buffer {
+  const key = crypto.createHash("sha256").update(`${WORLD_BAKE_VERSION}:${world.checksum}`);
+  for (const tileset of world.manifest.tilesets ?? []) {
+    const name = path.basename(String(tileset?.image ?? ""));
+    const file = path.join(assetPath, TILESETS_PATH, name);
+    const stat = name && fs.existsSync(file) ? fs.statSync(file) : null;
+    key.update(`:${name}:${stat ? `${stat.size}:${Math.floor(stat.mtimeMs)}` : "missing"}`);
+  }
+  const dir = path.join(os.tmpdir(), "frostfire-forge-assets", "worldmaps");
+  const prefix = `${world.id}-`;
+  const file = path.join(dir, `${prefix}${key.digest("hex").slice(0, 24)}.png`);
+  try {
+    if (fs.existsSync(file)) return fs.readFileSync(file);
+  } catch { /* unreadable: bake it */ }
+
+  const { png } = bakeChunkedWorldMap({
+    width: world.width,
+    height: world.height,
+    chunkSize: world.chunkSize,
+    tilesets: world.manifest.tilesets ?? [],
+    backgroundcolor: world.manifest.backgroundcolor,
+    layers: world.layers,
+    readChunk: (chunkX, chunkY) => readChunkTiles(world, chunkX, chunkY),
+  }, images);
+
+  // The kept copy is only a shortcut: a failure to write it changes nothing
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    for (const old of fs.readdirSync(dir)) {
+      // an earlier build of this world (the rest of the name is the 24-character key)
+      if (old.startsWith(prefix) && old.length === prefix.length + 28) fs.unlinkSync(path.join(dir, old));
+    }
+    fs.writeFileSync(`${file}.tmp`, png);
+    fs.renameSync(`${file}.tmp`, file);
+  } catch { /* no kept copy */ }
+  return png;
+}
+
 async function loadWorldMaps() {
   const now = performance.now();
   const mapDir = path.join(assetPath, MAPS_PATH);
@@ -425,6 +469,16 @@ async function loadWorldMaps() {
       baked++;
     } catch (e: any) {
       log.warn(`Could not bake the world map of ${map.name}: ${e?.message ?? e}`);
+    }
+  }
+  // Worlds (modules/worldstore.ts): baked from their packs, a large one several tiles to a pixel
+  for (const world of listWorlds()) {
+    try {
+      const png = bakeWorldCached(world, images);
+      worldMaps.push({ name: world.id, data: png.toString("base64"), version: crypto.createHash("sha256").update(png).digest("hex").slice(0, 16) });
+      baked++;
+    } catch (e: any) {
+      log.warn(`Could not bake the world map of ${world.name}: ${e?.message ?? e}`);
     }
   }
   let fromFiles = 0;
@@ -460,6 +514,9 @@ function loadAllMaps() {
 
   assetCache.add("maps", maps);
   log.success(`Loaded ${maps.length} map(s) in ${(performance.now() - now).toFixed(2)}ms`);
+
+  // Worlds: maps too large for one file, kept as <id>.world directories
+  loadWorlds(mapDir, new Set(mapFiles));
 }
 
 // Tiled stores "infinite" maps as per-layer `chunks` arrays instead of a flat

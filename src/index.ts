@@ -7,6 +7,8 @@ import { startHttpsServers, getInternalServerOptions } from "./modules/https_ser
 // Load asset loader
 import { initializeAssets, applyChunksWithRebase, getAssetsPath, normalizeInfiniteMap } from "./modules/assetloader";
 import assetCache from "./services/assetCache";
+import { getWorld, listWorlds, readWorldFile, readChunkTiles, buildWorldChunk, saveWorldChunks, saveWorldProperties, WorldSaveError, WORLD_SYNC_FILES, type WorldSyncFile } from "./modules/worldstore";
+import { TilesetImages, bakeChunkedWorldMap } from "./modules/worldmap";
 
 
 const authKey = process.env.ASSET_SERVER_AUTH_KEY || process.env.GATEWAY_AUTH_KEY || "change-this-secret-key";
@@ -41,6 +43,18 @@ const ALLOWED_AUDIO_EXTENSIONS = Object.keys(AUDIO_MIME_TYPES);
 function getAudioMimeType(fileName: string): string {
   return AUDIO_MIME_TYPES[path.extname(fileName).toLowerCase()] || "application/octet-stream";
 }
+
+// A world (modules/worldstore.ts) is saved chunk by chunk (/save-map-chunks, /save-map-properties), never replaced
+// whole.
+const WORLD_READ_ONLY = "A world cannot be replaced whole";
+
+// Full-detail pieces of a world's map image (/worldmap?name&rx&ry), each WORLD_MAP_REGION tiles a side and one
+// pixel per tile, baked on request and kept while the world stays as it is. The client asks by the same size
+// (worldmap.ts DETAIL_TILES).
+const WORLD_MAP_REGION = 1024;
+const WORLD_MAP_PIECES_MAX = 64;
+const worldMapPieces = new Map<string, Buffer>();
+let worldMapImages: TilesetImages | null = null;
 
 function acceptsGzip(req: Request): boolean {
   return (req.headers.get("accept-encoding") || "").includes("gzip");
@@ -319,10 +333,12 @@ const routes = {
       }
 
       try {
-        // Get map from cache
-        const maps = await assetCache.get("maps") as any[];
+        // Get map from cache. A world (modules/worldstore.ts) answers under the
+        // same name with the same chunk JSON, read from its packs on disk.
         const mapFile = mapName.endsWith(".json") ? mapName : `${mapName}.json`;
-        const map = maps?.find((m: any) => m.name === mapFile);
+        const world = getWorld(mapFile);
+        const maps = world ? null : await assetCache.get("maps") as any[];
+        const map = world ?? maps?.find((m: any) => m.name === mapFile);
 
         if (!map) {
           return new Response(JSON.stringify({ error: "Map not found" }), {
@@ -330,6 +346,10 @@ const routes = {
             headers: CORS_HEADERS
           });
         }
+
+        const buildChunk = () => world
+          ? buildWorldChunk(world, chunkX, chunkY, chunkSize)
+          : buildMapChunk(map.data, chunkX, chunkY, chunkSize);
 
         const wantGzip = acceptsGzip(req);
 
@@ -350,7 +370,7 @@ const routes = {
           }
 
           // Build the chunk (existing slicing logic), compress, and cache it.
-          const chunkPayload = buildMapChunk(map.data, chunkX, chunkY, chunkSize);
+          const chunkPayload = buildChunk();
           if (chunkPayload === null) {
             return new Response(JSON.stringify({ error: "Invalid chunk parameters" }), {
               status: 400,
@@ -370,7 +390,7 @@ const routes = {
         }
 
         // Non-gzip client: build fresh (rare - all modern browsers send gzip)
-        const chunkPayload = buildMapChunk(map.data, chunkX, chunkY, chunkSize);
+        const chunkPayload = buildChunk();
         if (chunkPayload === null) {
           return new Response(JSON.stringify({ error: "Invalid chunk parameters" }), {
             status: 400,
@@ -433,6 +453,53 @@ const routes = {
       }
     }
   },
+  // Worlds (modules/worldstore.ts) are too large for /map-checksums, which
+  // answers with whole maps. The game server asks for the list, then for each
+  // file it has no current copy of: the manifest and the two bitsets, never
+  // the tiles.
+  "/world-list": {
+    POST: async (req: Request) => {
+      try {
+        const { serverId, authKey: requestAuthKey } = await req.json() as { serverId?: string; authKey: string };
+        if (requestAuthKey !== authKey) {
+          return new Response(JSON.stringify({ error: "Invalid authentication key" }), { status: 401, headers: CORS_HEADERS });
+        }
+        const worlds = listWorlds().map(world => ({ id: world.id, name: world.name, files: world.fileHashes }));
+        log.info(`[AssetServer] World sync for ${serverId}: ${worlds.length} world(s)`);
+        return new Response(JSON.stringify({ success: true, worlds }), { status: 200, headers: CORS_HEADERS });
+      } catch (error: any) {
+        log.error(`Error in /world-list: ${error.message}`);
+        return new Response(JSON.stringify({ error: "Invalid request body" }), { status: 400, headers: CORS_HEADERS });
+      }
+    }
+  },
+  "/world-file": {
+    POST: async (req: Request) => {
+      try {
+        const { id, file, authKey: requestAuthKey } = await req.json() as { id: string; file: string; authKey: string };
+        if (requestAuthKey !== authKey) {
+          return new Response(JSON.stringify({ error: "Invalid authentication key" }), { status: 401, headers: CORS_HEADERS });
+        }
+        const world = typeof id === "string" ? getWorld(id) : undefined;
+        if (!world) {
+          return new Response(JSON.stringify({ error: "World not found" }), { status: 404, headers: CORS_HEADERS });
+        }
+        if (!WORLD_SYNC_FILES.includes(file as WorldSyncFile)) {
+          return new Response(JSON.stringify({ error: "Unknown world file" }), { status: 400, headers: CORS_HEADERS });
+        }
+        const bytes = readWorldFile(world, file as WorldSyncFile);
+        const headers: Record<string, string> = { ...CORS_HEADERS, "Content-Type": "application/octet-stream" };
+        // The bitsets are mostly runs of equal bytes: gzip takes megabytes down to kilobytes
+        if (acceptsGzip(req)) {
+          return new Response(zlib.gzipSync(bytes), { status: 200, headers: { ...headers, "Content-Encoding": "gzip", "Vary": "Accept-Encoding" } });
+        }
+        return new Response(bytes, { status: 200, headers });
+      } catch (error: any) {
+        log.error(`Error in /world-file: ${error.message}`);
+        return new Response(JSON.stringify({ error: "Failed to read world file" }), { status: 500, headers: CORS_HEADERS });
+      }
+    }
+  },
   "/update-map": {
     POST: async (req: Request) => {
       try {
@@ -442,6 +509,9 @@ const routes = {
         }
         if (!mapName || !mapData) {
           return new Response(JSON.stringify({ error: "Missing mapName or mapData" }), { status: 400, headers: CORS_HEADERS });
+        }
+        if (getWorld(mapName)) {
+          return new Response(JSON.stringify({ error: WORLD_READ_ONLY }), { status: 400, headers: CORS_HEADERS });
         }
         let maps = await assetCache.get("maps") as any[];
         if (!maps) maps = [];
@@ -485,6 +555,24 @@ const routes = {
 
         const maps = (await assetCache.get("maps")) as any[] || [];
         const mapFile = mapName.endsWith(".json") ? mapName : `${mapName}.json`;
+
+        // A world (modules/worldstore.ts) has a fixed size and is saved chunk by
+        // chunk into its packs: nothing of it is held or rewritten whole.
+        const world = getWorld(mapFile);
+        if (world) {
+          try {
+            const changed = saveWorldChunks(world, chunks);
+            clearChunkCacheForMap(mapFile);
+            log.info(`[AssetServer] World ${world.id} saved by ${serverId || "a server"}: ${changed.length} of ${chunks.length} chunk(s) changed`);
+            return new Response(JSON.stringify({ success: true, checksum: world.checksum, changed, message: `Saved ${changed.length} chunk(s) for map ${mapName}` }), { status: 200, headers: CORS_HEADERS });
+          } catch (worldError: any) {
+            if (worldError instanceof WorldSaveError) {
+              return new Response(JSON.stringify({ error: worldError.message }), { status: 400, headers: CORS_HEADERS });
+            }
+            throw worldError;
+          }
+        }
+
         const mapIndex = maps.findIndex((m: any) => m.name === mapFile);
 
         if (mapIndex === -1) {
@@ -552,6 +640,22 @@ const routes = {
 
         const maps = (await assetCache.get("maps")) as any[] || [];
         const mapFile = mapName.endsWith(".json") ? mapName : `${mapName}.json`;
+
+        // A world (modules/worldstore.ts) keeps them as objects of its manifest
+        const world = getWorld(mapFile);
+        if (world) {
+          try {
+            saveWorldProperties(world, graveyards, warps);
+            log.info(`[AssetServer] World ${world.id}: graveyards / warps saved`);
+            return new Response(JSON.stringify({ success: true, checksum: world.checksum, message: `Saved properties for map ${mapName}` }), { status: 200, headers: CORS_HEADERS });
+          } catch (worldError: any) {
+            if (worldError instanceof WorldSaveError) {
+              return new Response(JSON.stringify({ error: worldError.message }), { status: 400, headers: CORS_HEADERS });
+            }
+            throw worldError;
+          }
+        }
+
         const mapIndex = maps.findIndex((m: any) => m.name === mapFile);
 
         if (mapIndex === -1) {
@@ -851,6 +955,48 @@ const routes = {
         return new Response(JSON.stringify({ error: "Invalid map name" }), { status: 400, headers: CORS_HEADERS });
       }
       try {
+        // A piece of a world at full detail (rx, ry: which region of WORLD_MAP_REGION tiles), for the map view
+        // zoomed in: a world's whole image is several tiles to a pixel. Baked when first asked for.
+        if (url.searchParams.has("rx") || url.searchParams.has("ry")) {
+          const world = getWorld(key);
+          const rx = Number(url.searchParams.get("rx")), ry = Number(url.searchParams.get("ry"));
+          if (!world || !Number.isInteger(rx) || !Number.isInteger(ry) || rx < 0 || ry < 0 || rx * WORLD_MAP_REGION >= world.width || ry * WORLD_MAP_REGION >= world.height) {
+            return new Response(JSON.stringify({ error: "World map not found" }), { status: 404, headers: CORS_HEADERS });
+          }
+          const pieceKey = `${world.id}:${world.checksum}:${rx}:${ry}`;
+          const etag = `"${world.checksum.slice(0, 16)}-${rx}-${ry}"`;
+          const headers = {
+            "Content-Type": "image/png",
+            "Cache-Control": "public, max-age=0, must-revalidate",
+            "ETag": etag,
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type",
+            "Access-Control-Expose-Headers": "ETag",
+          };
+          if (req.headers.get("If-None-Match") === etag) return new Response(null, { status: 304, headers });
+          let png = worldMapPieces.get(pieceKey);
+          if (!png) {
+            const chunks = WORLD_MAP_REGION / world.chunkSize;
+            worldMapImages ??= new TilesetImages(path.join(getAssetsPath(), "tilesets"));
+            png = bakeChunkedWorldMap({
+              width: Math.min(WORLD_MAP_REGION, world.width - rx * WORLD_MAP_REGION),
+              height: Math.min(WORLD_MAP_REGION, world.height - ry * WORLD_MAP_REGION),
+              chunkSize: world.chunkSize,
+              tilesets: world.manifest.tilesets ?? [],
+              backgroundcolor: world.manifest.backgroundcolor,
+              layers: world.layers,
+              readChunk: (chunkX, chunkY) => readChunkTiles(world, rx * chunks + chunkX, ry * chunks + chunkY),
+            }, worldMapImages).png;
+            worldMapPieces.set(pieceKey, png);
+            if (worldMapPieces.size > WORLD_MAP_PIECES_MAX) {
+              const oldest = worldMapPieces.keys().next().value;
+              if (oldest !== undefined) worldMapPieces.delete(oldest);
+            }
+          }
+          return new Response(png, { status: 200, headers: { ...headers, "Content-Length": png.length.toString() } });
+        }
+
         const worldMaps = await assetCache.get("worldmaps") as any[] | null;
         const entry = worldMaps?.find((m: any) => m.name === key);
         if (!entry?.data) {

@@ -84,3 +84,96 @@ export function bakeWorldMap(map: any, images: TilesetImages): Buffer {
   for (let i = 0; i < W * H * 3; i++) px[i] = Math.round(rgb[i]!);
   return encodePng(W, H, px, 3);
 }
+
+/** The longest edge, in pixels, of the image baked for a world: larger worlds are baked several tiles to a pixel. */
+const CHUNKED_MAX_EDGE = 4096;
+
+/** A map held chunk by chunk (a world, modules/worldstore.ts): what the bake needs of it. */
+export interface ChunkedMap {
+  width: number;
+  height: number;
+  chunkSize: number;
+  tilesets: any[];
+  backgroundcolor?: string;
+  /** Tile layers in drawing order; `tileIndex` picks the layer's tiles out of a chunk. */
+  layers: { name: string; visible: boolean; tileIndex: number }[];
+  /** The tiles of one chunk: one array of chunkSize * chunkSize gids per tile layer, by tileIndex. */
+  readChunk: (chunkX: number, chunkY: number) => number[][];
+}
+
+/** How many tiles one pixel of a world's baked image covers along each axis (a power of two, 1 for a small world). */
+export function chunkedMapScale(map: Pick<ChunkedMap, "width" | "height" | "chunkSize">): number {
+  let scale = 1;
+  while (Math.max(map.width, map.height) / scale > CHUNKED_MAX_EDGE && scale < map.chunkSize) scale *= 2;
+  return scale;
+}
+
+// The same bake as bakeWorldMap for a map that is never held whole: read chunk by chunk, and for a large world
+// several tiles to a pixel (each pixel the mean of the tiles it covers), so the 10240 x 10240 continent comes out
+// 2560 x 2560 instead of an image no browser should have to hold. At one tile to a pixel the image is the one
+// bakeWorldMap gives for the same map.
+export function bakeChunkedWorldMap(map: ChunkedMap, images: TilesetImages): { png: Buffer; scale: number } {
+  const W = map.width, H = map.height, cs = map.chunkSize;
+  if (!W || !H || !cs) throw new Error("map without a size");
+  const scale = chunkedMapScale(map), outW = Math.floor(W / scale), outH = Math.floor(H / scale);
+  const bg = typeof map.backgroundcolor === "string" && /^#[0-9a-f]{6}$/i.test(map.backgroundcolor)
+    ? [1, 3, 5].map(i => parseInt(map.backgroundcolor!.slice(i, i + 2), 16)) as [number, number, number] : BACKGROUND;
+
+  const sheets = (map.tilesets ?? []).filter((t: any) => t?.image).sort((a: any, b: any) => b.firstgid - a.firstgid).map((t: any) => {
+    const img = images.get(path.basename(String(t.image)));
+    const tw = Number(t.tilewidth) || 16, th = Number(t.tileheight) || 16;
+    return { first: Number(t.firstgid), img, tw, th, cols: Number(t.columns) || (img ? Math.floor(img.width / tw) : 1) };
+  });
+  // average colour and coverage of a gid, cached
+  const avg = new Map<number, [number, number, number, number]>();
+  const colourOf = (gid: number) => {
+    let c = avg.get(gid);
+    if (c) return c;
+    c = [0, 0, 0, 0];
+    const s = sheets.find((t: any) => gid >= t.first);
+    if (s?.img) {
+      const id = gid - s.first, cx = (id % s.cols) * s.tw, cy = Math.floor(id / s.cols) * s.th;
+      let r = 0, g = 0, b = 0, a = 0;
+      for (let y = 0; y < s.th; y++) for (let x = 0; x < s.tw; x++) {
+        const px = cx + x, py = cy + y;
+        if (px >= s.img.width || py >= s.img.height) continue;
+        const i = (py * s.img.width + px) * 4, al = s.img.data[i + 3]! / 255;
+        r += s.img.data[i]! * al; g += s.img.data[i + 1]! * al; b += s.img.data[i + 2]! * al; a += al;
+      }
+      c = a > 0 ? [r / a, g / a, b / a, a / (s.tw * s.th)] : [0, 0, 0, 0];
+    }
+    avg.set(gid, c);
+    return c;
+  };
+
+  const drawn = map.layers.filter(l => l.visible !== false && !HIDDEN.test(String(l.name ?? "")));
+  const px = new Uint8Array(outW * outH * 3), rgb = new Float32Array(cs * cs * 3), per = cs / scale, n = scale * scale;
+  for (let cy = 0; cy * cs < H; cy++) for (let cx = 0; cx * cs < W; cx++) {
+    const tiles = map.readChunk(cx, cy);
+    for (let i = 0; i < cs * cs; i++) { rgb[i * 3] = bg[0]; rgb[i * 3 + 1] = bg[1]; rgb[i * 3 + 2] = bg[2]; }
+    for (const layer of drawn) {
+      const data = tiles[layer.tileIndex];
+      if (!data) continue;
+      for (let k = 0; k < cs * cs; k++) {
+        const gid = data[k]! & GID_MASK;
+        if (!gid) continue;
+        const [r, g, b, a] = colourOf(gid);
+        if (a <= 0) continue;
+        const i = k * 3;
+        rgb[i] = rgb[i]! * (1 - a) + r * a; rgb[i + 1] = rgb[i + 1]! * (1 - a) + g * a; rgb[i + 2] = rgb[i + 2]! * (1 - a) + b * a;
+      }
+    }
+    for (let py = 0; py < per; py++) for (let qx = 0; qx < per; qx++) {
+      const ox = cx * per + qx, oy = cy * per + py;
+      if (ox >= outW || oy >= outH) continue;
+      let r = 0, g = 0, b = 0;
+      for (let dy = 0; dy < scale; dy++) for (let dx = 0; dx < scale; dx++) {
+        const i = ((py * scale + dy) * cs + qx * scale + dx) * 3;
+        r += rgb[i]!; g += rgb[i + 1]!; b += rgb[i + 2]!;
+      }
+      const o = (oy * outW + ox) * 3;
+      px[o] = Math.round(r / n); px[o + 1] = Math.round(g / n); px[o + 2] = Math.round(b / n);
+    }
+  }
+  return { png: encodePng(outW, outH, px, 3), scale };
+}
