@@ -420,8 +420,11 @@ const routes = {
         }
         const maps = await assetCache.get("maps") as any[];
         if (!maps || maps.length === 0) {
-          return new Response(JSON.stringify({ success: true, outdatedMaps: [] }), { status: 200, headers: CORS_HEADERS });
+          return new Response(JSON.stringify({ success: true, outdatedMaps: [], maps: [] }), { status: 200, headers: CORS_HEADERS });
         }
+        // Every map held here, by name. The game server removes local maps that
+        // are not in this list, so its folder stays a copy of this one.
+        const mapNames = maps.map((map) => map.name);
         const outdatedMaps: any[] = [];
         for (const map of maps) {
           const mapName = map.name;
@@ -435,7 +438,7 @@ const routes = {
         // Outdated maps carry full map data - this response can be megabytes.
         // gzip cuts it 80-90%; Bun's fetch on the game server decompresses
         // transparently, so no consumer changes are needed.
-        const payload = JSON.stringify({ success: true, outdatedMaps });
+        const payload = JSON.stringify({ success: true, outdatedMaps, maps: mapNames });
         if (acceptsGzip(req)) {
           return new Response(zlib.gzipSync(payload), {
             status: 200,
