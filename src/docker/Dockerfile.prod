@@ -12,6 +12,18 @@ FROM base AS production
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
+ARG VERSION=unknown
+ARG REVISION=unknown
+ARG BUILD_DATE=unknown
+
+ENV APP_VERSION=${VERSION}
+
+LABEL org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${REVISION}" \
+      org.opencontainers.image.created="${BUILD_DATE}" \
+      org.opencontainers.image.title="Frostfire Forge Assets (Production)" \
+      org.opencontainers.image.description="Frostfire Forge Asset Server"
+
 EXPOSE 80 443 443/udp 8000 8000/udp 8082 8082/udp
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \

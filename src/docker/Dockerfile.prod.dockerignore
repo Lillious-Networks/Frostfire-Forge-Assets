@@ -1,0 +1,36 @@
+# Build context rules for Dockerfile.prod only.
+# BuildKit uses this file when it builds Dockerfile.prod.
+# The production image is published to a registry: nothing secret or
+# specific to one installation may be copied into it.
+
+# Environment files (supplied at runtime through env_file)
+.env*
+
+# TLS certificates and private keys (mounted at runtime)
+certs
+src/certs/**
+!src/certs/**/.gitkeep
+
+# Logs
+src/logs
+*.log
+
+# Node modules (installed in the container)
+node_modules
+bun.lockb
+
+# Git and CI
+.git
+.github
+.gitignore
+.husky
+
+# IDE and editor files
+.vscode
+.idea
+.claude
+.VSCodeCounter
+
+# OS
+.DS_Store
+Thumbs.db
