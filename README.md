@@ -282,6 +282,12 @@ The asset server is designed to work seamlessly with the Frostfire Forge Game En
 
 For game engine integration details, see the [Frostfire Forge documentation](https://github.com/Lillious-Networks/Frostfire-Forge).
 
+## License
+
+Free for noncommercial use under the [PolyForm Noncommercial License 1.0.0](LICENSE). Every commercial use needs a paid [commercial license](COMMERCIAL-LICENSE.md) from Lillious Networks. See [LICENSING.md](LICENSING.md) for which one applies to you.
+
+Contributions are welcome and need a signed [Contributor License Agreement](CLA.md); see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ---
 
 <p align="center">

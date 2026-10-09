@@ -1,5 +1,6 @@
 {
   "name": "frostfire-forge-assets",
+  "license": "SEE LICENSE IN LICENSING.md",
   "module": "src/index.ts",
   "type": "module",
   "private": true,
