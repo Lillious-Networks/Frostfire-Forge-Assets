@@ -67,8 +67,24 @@ export interface World {
   // Tile layers in the order the map lists them (the order of a chunk's layers)
   layers: WorldTileLayer[];
   fileHashes: Record<WorldSyncFile, string>;
-  packTables: Map<string, PackEntry[]>;
+  // The table of each pack read so far, with the file's size and time when it was read
+  packTables: Map<string, PackTable>;
+  // manifest.json's size and time when it was read: a change means another program (the Tiled extension, the map
+  // generator) rewrote the world, and it is read again
+  manifestStamp: FileStamp;
 }
+
+interface FileStamp {
+  size: number;
+  mtimeMs: number;
+}
+
+interface PackTable extends FileStamp {
+  entries: PackEntry[];
+}
+
+const stampOf = (stat: fs.Stats): FileStamp => ({ size: stat.size, mtimeMs: stat.mtimeMs });
+const sameStamp = (a: FileStamp, b: FileStamp): boolean => a.size === b.size && a.mtimeMs === b.mtimeMs;
 
 const worlds = new Map<string, World>();
 
@@ -81,6 +97,7 @@ function isPositiveInt(value: unknown): value is number {
 }
 
 function openWorld(dir: string, id: string): World {
+  const manifestStamp = stampOf(fs.statSync(path.join(dir, "manifest.json")));
   const manifestBytes = fs.readFileSync(path.join(dir, "manifest.json"));
   const manifest = JSON.parse(manifestBytes.toString("utf-8"));
 
@@ -136,7 +153,69 @@ function openWorld(dir: string, id: string): World {
     layers,
     fileHashes,
     packTables: new Map(),
+    manifestStamp,
   };
+}
+
+/** What changed in a world's tiles: the chunks, or "all" when the world's layers, tilesets or size changed. */
+export type WorldTileChange = { chunkX: number; chunkY: number }[] | "all";
+type WorldChangeListener = (world: World, change: WorldTileChange) => void;
+const changeListeners: WorldChangeListener[] = [];
+
+/** Calls `listener` after a world's tiles changed: an editor save here, or a save by another program on disk. */
+export function onWorldTilesChanged(listener: WorldChangeListener): void {
+  changeListeners.push(listener);
+}
+
+function tilesChanged(world: World, change: WorldTileChange): void {
+  if (change !== "all" && change.length === 0) return;
+  for (const listener of changeListeners) {
+    try {
+      listener(world, change);
+    } catch (e: any) {
+      log.error(`World ${world.name}: ${e?.message ?? e}`);
+    }
+  }
+}
+
+// The chunks of the packs whose hash differs between two manifests of a world, or "all" when more than the packs
+// changed (layers, tilesets, size)
+function changedChunks(before: any, after: World): WorldTileChange {
+  const same = (key: string) => JSON.stringify(before?.[key]) === JSON.stringify(after.manifest[key]);
+  if (!same("layers") || !same("tilesets") || !same("width") || !same("height") || !same("chunkSize") || !same("packChunks")) return "all";
+  const old = new Map<string, string>((before.packs ?? []).map((p: any) => [`${p.px}_${p.py}`, p.packHash]));
+  const pc = after.packChunks, chunks: { chunkX: number; chunkY: number }[] = [];
+  for (const pack of after.manifest.packs) {
+    if (old.get(`${pack.px}_${pack.py}`) === pack.packHash) continue;
+    for (let ly = 0; ly < pc; ly++) for (let lx = 0; lx < pc; lx++) {
+      const chunkX = pack.px * pc + lx, chunkY = pack.py * pc + ly;
+      if (chunkX < after.chunksX && chunkY < after.chunksY) chunks.push({ chunkX, chunkY });
+    }
+  }
+  return chunks;
+}
+
+// Reads a world again when its manifest changed on disk since it was read. The world object is updated in place, so
+// everything that holds it sees the new state; its pack tables are dropped and read again when needed. A manifest
+// that cannot be read keeps the loaded copy.
+function refreshWorld(world: World): void {
+  let stamp: FileStamp;
+  try {
+    stamp = stampOf(fs.statSync(path.join(world.dir, "manifest.json")));
+  } catch {
+    return;
+  }
+  if (sameStamp(stamp, world.manifestStamp)) return;
+  try {
+    const fresh = openWorld(world.dir, world.id);
+    const before = world.manifest;
+    Object.assign(world, fresh);
+    log.info(`World ${world.name} changed on disk: read again (revision ${world.manifest.worldRev ?? 0})`);
+    tilesChanged(world, changedChunks(before, world));
+  } catch (e: any) {
+    world.manifestStamp = stamp;
+    log.error(`World ${world.name} changed on disk but cannot be read: ${e?.message ?? e}. Keeping the loaded copy.`);
+  }
 }
 
 function packPath(dir: string, px: number, py: number): string {
@@ -172,13 +251,25 @@ export function loadWorlds(mapDir: string, tiledMapNames: Set<string>): void {
   if (worlds.size > 0) log.success(`Loaded ${worlds.size} world(s) in ${(performance.now() - now).toFixed(2)}ms`);
 }
 
-// mapName with or without ".json"
+/** A world just made in the maps folder (modules/mapcreate.ts), taken in like those found at start. */
+export function addWorld(mapDir: string, id: string): World {
+  const world = openWorld(path.join(mapDir, `${id}.world`), id);
+  mendWorld(world);
+  worlds.set(world.name, world);
+  return world;
+}
+
+// mapName with or without ".json". A world changed on disk since it was read is read again first.
 export function getWorld(mapName: string): World | undefined {
-  return worlds.get(mapName.endsWith(".json") ? mapName : `${mapName}.json`);
+  const world = worlds.get(mapName.endsWith(".json") ? mapName : `${mapName}.json`);
+  if (world) refreshWorld(world);
+  return world;
 }
 
 export function listWorlds(): World[] {
-  return [...worlds.values()];
+  const all = [...worlds.values()];
+  for (const world of all) refreshWorld(world);
+  return all;
 }
 
 export function readWorldFile(world: World, file: WorldSyncFile): Buffer {
@@ -240,12 +331,14 @@ export function readChunkTiles(world: World, chunkX: number, chunkY: number): nu
   let entry: PackEntry;
   const fd = fs.openSync(packPath(world.dir, px, py), "r");
   try {
+    // A pack rewritten since its table was read (by another program) has its records elsewhere: read the table again
+    const stamp = stampOf(fs.fstatSync(fd));
     let table = world.packTables.get(key);
-    if (!table) {
-      table = readPackTable(world, fd, px, py);
+    if (!table || !sameStamp(table, stamp)) {
+      table = { ...stamp, entries: readPackTable(world, fd, px, py) };
       world.packTables.set(key, table);
     }
-    entry = table[index]!;
+    entry = table.entries[index]!;
     if (entry.offset === 0) return tiles;
     stored = readAt(fd, entry.storedLength, entry.offset);
   } finally {
@@ -367,6 +460,8 @@ export class WorldSaveError extends Error {}
  * same as it is on disk is not written. Returns the chunks that changed.
  */
 export function saveWorldChunks(world: World, chunks: any[]): { chunkX: number; chunkY: number }[] {
+  // the save builds on the world as it is on disk, not as it was when last read
+  refreshWorld(world);
   const cs = world.chunkSize, area = cs * cs, pc = world.packChunks;
   const byName = new Map(world.layers.map(layer => [layer.name, layer]));
 
@@ -463,7 +558,9 @@ export function saveWorldChunks(world: World, chunks: any[]): { chunkX: number; 
   // 3. write: packs first, then the bitsets and the manifest (a stop in between is mended at the next start)
   for (const pack of rewritten) writeFileAtomic(packPath(world.dir, pack.px, pack.py), pack.bytes);
   commitWorld(world, changed, rewritten);
-  return changed.map(chunk => ({ chunkX: chunk.chunkX, chunkY: chunk.chunkY }));
+  const result = changed.map(chunk => ({ chunkX: chunk.chunkX, chunkY: chunk.chunkY }));
+  tilesChanged(world, result);
+  return result;
 }
 
 function layerRoles(world: World): { collision: number[]; nopvp: number[] } {
@@ -506,6 +603,8 @@ function commitWorld(world: World, changed: { chunkX: number; chunkY: number; ti
 function writeManifest(world: World, bitsetHashes?: { "collision.bits": string; "nopvp.bits": string }): void {
   const manifestBytes = Buffer.from(`${JSON.stringify(world.manifest, null, 1)}\n`, "utf-8");
   writeFileAtomic(path.join(world.dir, "manifest.json"), manifestBytes);
+  // our own write: not a change from outside
+  world.manifestStamp = stampOf(fs.statSync(path.join(world.dir, "manifest.json")));
   world.fileHashes = { ...world.fileHashes, ...(bitsetHashes ?? {}), "manifest.json": sha256(manifestBytes) };
   world.checksum = world.fileHashes["manifest.json"];
 }
@@ -517,6 +616,8 @@ function writeManifest(world: World, bitsetHashes?: { "collision.bits": string; 
  * size: { width, height } }. A list left out is kept as it is.
  */
 export function saveWorldProperties(world: World, graveyards?: any, warps?: any): void {
+  // the save builds on the manifest as it is on disk, so objects saved there by another program are kept
+  refreshWorld(world);
   const manifest = world.manifest;
   const listOf = (value: any): any[] => Array.isArray(value) ? value : Object.entries(value ?? {}).map(([name, data]: [string, any]) => ({ name, ...data }));
   const number = (value: unknown, what: string): number => {

@@ -113,24 +113,67 @@ export function chunkedMapScale(map: Pick<ChunkedMap, "width" | "height" | "chun
 // 2560 x 2560 instead of an image no browser should have to hold. At one tile to a pixel the image is the one
 // bakeWorldMap gives for the same map.
 export function bakeChunkedWorldMap(map: ChunkedMap, images: TilesetImages): { png: Buffer; scale: number } {
-  const W = map.width, H = map.height, cs = map.chunkSize;
-  if (!W || !H || !cs) throw new Error("map without a size");
-  const scale = chunkedMapScale(map), outW = Math.floor(W / scale), outH = Math.floor(H / scale);
-  const bg = typeof map.backgroundcolor === "string" && /^#[0-9a-f]{6}$/i.test(map.backgroundcolor)
-    ? [1, 3, 5].map(i => parseInt(map.backgroundcolor!.slice(i, i + 2), 16)) as [number, number, number] : BACKGROUND;
+  const bake = new ChunkedMapBake(map, images);
+  bake.drawAll();
+  return { png: bake.png(), scale: bake.scale };
+}
 
-  const sheets = (map.tilesets ?? []).filter((t: any) => t?.image).sort((a: any, b: any) => b.firstgid - a.firstgid).map((t: any) => {
-    const img = images.get(path.basename(String(t.image)));
-    const tw = Number(t.tilewidth) || 16, th = Number(t.tileheight) || 16;
-    return { first: Number(t.firstgid), img, tw, th, cols: Number(t.columns) || (img ? Math.floor(img.width / tw) : 1) };
-  });
+/**
+ * The image of a chunked map, kept as pixels so that chunks can be drawn again one by one: after a save only the
+ * changed chunks are baked again (assetloader.ts), not the whole world.
+ */
+export class ChunkedMapBake {
+  readonly scale: number;
+  readonly width: number;
+  readonly height: number;
+  /** RGB, three bytes per pixel. */
+  readonly pixels: Uint8Array;
+  private readonly bg: [number, number, number];
+  private readonly drawn: ChunkedMap["layers"];
+  private readonly sheets: { first: number; img: RGBAImage | null; tw: number; th: number; cols: number }[];
   // average colour and coverage of a gid, cached
-  const avg = new Map<number, [number, number, number, number]>();
-  const colourOf = (gid: number) => {
-    let c = avg.get(gid);
+  private readonly avg = new Map<number, [number, number, number, number]>();
+  private readonly rgb: Float32Array;
+
+  /** `pixels` (RGB, of the same size) starts the image from an earlier bake; without it the image is empty. */
+  constructor(private readonly map: ChunkedMap, images: TilesetImages, pixels?: Uint8Array) {
+    const W = map.width, H = map.height, cs = map.chunkSize;
+    if (!W || !H || !cs) throw new Error("map without a size");
+    this.scale = chunkedMapScale(map);
+    this.width = Math.floor(W / this.scale);
+    this.height = Math.floor(H / this.scale);
+    if (pixels && pixels.length !== this.width * this.height * 3) throw new Error("the earlier image has another size");
+    this.pixels = pixels ?? new Uint8Array(this.width * this.height * 3);
+    this.bg = typeof map.backgroundcolor === "string" && /^#[0-9a-f]{6}$/i.test(map.backgroundcolor)
+      ? [1, 3, 5].map(i => parseInt(map.backgroundcolor!.slice(i, i + 2), 16)) as [number, number, number] : BACKGROUND;
+    this.sheets = (map.tilesets ?? []).filter((t: any) => t?.image).sort((a: any, b: any) => b.firstgid - a.firstgid).map((t: any) => {
+      const img = images.get(path.basename(String(t.image)));
+      const tw = Number(t.tilewidth) || 16, th = Number(t.tileheight) || 16;
+      return { first: Number(t.firstgid), img, tw, th, cols: Number(t.columns) || (img ? Math.floor(img.width / tw) : 1) };
+    });
+    this.drawn = map.layers.filter(l => l.visible !== false && !HIDDEN.test(String(l.name ?? "")));
+    this.rgb = new Float32Array(cs * cs * 3);
+  }
+
+  /** Start from an earlier bake's PNG; null when it cannot be read or has another size. */
+  static fromPng(map: ChunkedMap, images: TilesetImages, png: Uint8Array): ChunkedMapBake | null {
+    try {
+      const img = decodePng(png);
+      const rgb = new Uint8Array(img.width * img.height * 3);
+      for (let i = 0, o = 0; i < img.width * img.height; i++, o += 3) {
+        rgb[o] = img.data[i * 4]!; rgb[o + 1] = img.data[i * 4 + 1]!; rgb[o + 2] = img.data[i * 4 + 2]!;
+      }
+      return new ChunkedMapBake(map, images, rgb);
+    } catch {
+      return null;
+    }
+  }
+
+  private colourOf(gid: number): [number, number, number, number] {
+    let c = this.avg.get(gid);
     if (c) return c;
     c = [0, 0, 0, 0];
-    const s = sheets.find((t: any) => gid >= t.first);
+    const s = this.sheets.find(t => gid >= t.first);
     if (s?.img) {
       const id = gid - s.first, cx = (id % s.cols) * s.tw, cy = Math.floor(id / s.cols) * s.th;
       let r = 0, g = 0, b = 0, a = 0;
@@ -142,22 +185,23 @@ export function bakeChunkedWorldMap(map: ChunkedMap, images: TilesetImages): { p
       }
       c = a > 0 ? [r / a, g / a, b / a, a / (s.tw * s.th)] : [0, 0, 0, 0];
     }
-    avg.set(gid, c);
+    this.avg.set(gid, c);
     return c;
-  };
+  }
 
-  const drawn = map.layers.filter(l => l.visible !== false && !HIDDEN.test(String(l.name ?? "")));
-  const px = new Uint8Array(outW * outH * 3), rgb = new Float32Array(cs * cs * 3), per = cs / scale, n = scale * scale;
-  for (let cy = 0; cy * cs < H; cy++) for (let cx = 0; cx * cs < W; cx++) {
-    const tiles = map.readChunk(cx, cy);
+  /** Draw one chunk (its pixels are replaced). */
+  drawChunk(cx: number, cy: number): void {
+    const cs = this.map.chunkSize, scale = this.scale, per = cs / scale, n = scale * scale, rgb = this.rgb, bg = this.bg;
+    if (cx < 0 || cy < 0 || cx * cs >= this.map.width || cy * cs >= this.map.height) return;
+    const tiles = this.map.readChunk(cx, cy);
     for (let i = 0; i < cs * cs; i++) { rgb[i * 3] = bg[0]; rgb[i * 3 + 1] = bg[1]; rgb[i * 3 + 2] = bg[2]; }
-    for (const layer of drawn) {
+    for (const layer of this.drawn) {
       const data = tiles[layer.tileIndex];
       if (!data) continue;
       for (let k = 0; k < cs * cs; k++) {
         const gid = data[k]! & GID_MASK;
         if (!gid) continue;
-        const [r, g, b, a] = colourOf(gid);
+        const [r, g, b, a] = this.colourOf(gid);
         if (a <= 0) continue;
         const i = k * 3;
         rgb[i] = rgb[i]! * (1 - a) + r * a; rgb[i + 1] = rgb[i + 1]! * (1 - a) + g * a; rgb[i + 2] = rgb[i + 2]! * (1 - a) + b * a;
@@ -165,15 +209,23 @@ export function bakeChunkedWorldMap(map: ChunkedMap, images: TilesetImages): { p
     }
     for (let py = 0; py < per; py++) for (let qx = 0; qx < per; qx++) {
       const ox = cx * per + qx, oy = cy * per + py;
-      if (ox >= outW || oy >= outH) continue;
+      if (ox >= this.width || oy >= this.height) continue;
       let r = 0, g = 0, b = 0;
       for (let dy = 0; dy < scale; dy++) for (let dx = 0; dx < scale; dx++) {
         const i = ((py * scale + dy) * cs + qx * scale + dx) * 3;
         r += rgb[i]!; g += rgb[i + 1]!; b += rgb[i + 2]!;
       }
-      const o = (oy * outW + ox) * 3;
-      px[o] = Math.round(r / n); px[o + 1] = Math.round(g / n); px[o + 2] = Math.round(b / n);
+      const o = (oy * this.width + ox) * 3;
+      this.pixels[o] = Math.round(r / n); this.pixels[o + 1] = Math.round(g / n); this.pixels[o + 2] = Math.round(b / n);
     }
   }
-  return { png: encodePng(outW, outH, px, 3), scale };
+
+  drawAll(): void {
+    const cs = this.map.chunkSize;
+    for (let cy = 0; cy * cs < this.map.height; cy++) for (let cx = 0; cx * cs < this.map.width; cx++) this.drawChunk(cx, cy);
+  }
+
+  png(): Buffer {
+    return encodePng(this.width, this.height, this.pixels, 3);
+  }
 }

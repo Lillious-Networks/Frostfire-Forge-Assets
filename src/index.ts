@@ -1,15 +1,24 @@
 const now = performance.now();
 import log from "./modules/logger";
 import path from "path";
+import fs from "fs";
 import zlib from "zlib";
 import { startHttpsServers, getInternalServerOptions } from "./modules/https_servers";
 
 // Load asset loader
-import { initializeAssets, applyChunksWithRebase, getAssetsPath, normalizeInfiniteMap } from "./modules/assetloader";
+import { initializeAssets, applyChunksWithRebase, getAssetsPath, normalizeInfiniteMap, registerNewMap } from "./modules/assetloader";
 import assetCache from "./services/assetCache";
-import { getWorld, listWorlds, readWorldFile, readChunkTiles, buildWorldChunk, saveWorldChunks, saveWorldProperties, WorldSaveError, WORLD_SYNC_FILES, type WorldSyncFile } from "./modules/worldstore";
+import { addWorld, getWorld, listWorlds, readWorldFile, readChunkTiles, buildWorldChunk, saveWorldChunks, saveWorldProperties, WorldSaveError, WORLD_SYNC_FILES, type WorldSyncFile } from "./modules/worldstore";
 import { TilesetImages, bakeChunkedWorldMap } from "./modules/worldmap";
+import { checkTileSoundChanges, getTileSounds, saveTileSounds, type TileSoundChange } from "./modules/tilesounds";
+import { blankTiledMap, checkCreateMap, pngSize, tilesetDefinitions, writeBlankWorld, type CreateMapRequest } from "./modules/mapcreate";
 
+
+/** The tileset pictures the asset server has (its tilesets cache, the .json definitions left out). */
+async function tilesetImageNames(): Promise<string[]> {
+  const cached = (await assetCache.get("tilesets") as any[] | null) ?? [];
+  return cached.map((t: any) => String(t.name)).filter((n: string) => /\.(png|jpe?g|webp)$/i.test(n)).sort((a: string, b: string) => a.localeCompare(b));
+}
 
 const authKey = process.env.ASSET_SERVER_AUTH_KEY || process.env.GATEWAY_AUTH_KEY || "change-this-secret-key";
 
@@ -1000,6 +1009,8 @@ const routes = {
           return new Response(png, { status: 200, headers: { ...headers, "Content-Length": png.length.toString() } });
         }
 
+        // A world changed on disk is read again here, which bakes its image again shortly (assetloader.ts rebakeWorld)
+        getWorld(key);
         const worldMaps = await assetCache.get("worldmaps") as any[] | null;
         const entry = worldMaps?.find((m: any) => m.name === key);
         if (!entry?.data) {
@@ -1133,6 +1144,87 @@ const routes = {
     HEAD: async (req: Request) => {
       // Reuse GET logic - serveAudioBuffer returns headers-only for HEAD.
       return (routes["/audio"] as any).GET(req);
+    }
+  },
+  // The footstep sounds the map editor sets on tiles (modules/tilesounds.ts): read by every game client, written by
+  // the game server for an admin
+  "/tile-sounds": {
+    GET: async () => {
+      try {
+        return new Response(JSON.stringify({ tilesets: getTileSounds() }), { status: 200, headers: CORS_HEADERS });
+      } catch (error: any) {
+        log.error(`Error reading tile sounds: ${error.message}`);
+        return new Response(JSON.stringify({ error: "Internal server error" }), { status: 500, headers: CORS_HEADERS });
+      }
+    }
+  },
+  "/save-tile-sounds": {
+    POST: async (req: Request) => {
+      try {
+        const body = await req.json() as { changes?: TileSoundChange[]; authKey?: string };
+        if (body?.authKey !== authKey) {
+          return new Response(JSON.stringify({ error: "Invalid authentication key" }), { status: 401, headers: CORS_HEADERS });
+        }
+        const wrong = checkTileSoundChanges(body.changes);
+        if (wrong) return new Response(JSON.stringify({ error: wrong }), { status: 400, headers: CORS_HEADERS });
+        const tilesets = saveTileSounds(body.changes!);
+        log.info(`[AssetServer] Tile sounds saved: ${body.changes!.reduce((n, c) => n + c.ids.length, 0)} tiles changed`);
+        return new Response(JSON.stringify({ success: true, tilesets }), { status: 200, headers: CORS_HEADERS });
+      } catch (error: any) {
+        log.error(`Error in /save-tile-sounds: ${error.message}`);
+        return new Response(JSON.stringify({ error: "Failed to save tile sounds" }), { status: 500, headers: CORS_HEADERS });
+      }
+    }
+  },
+  // The tileset pictures there are, for the map editor's New map form
+  "/tileset-list": {
+    GET: async () => {
+      try {
+        return new Response(JSON.stringify({ tilesets: await tilesetImageNames() }), { status: 200, headers: CORS_HEADERS });
+      } catch (error: any) {
+        log.error(`Error listing tilesets: ${error.message}`);
+        return new Response(JSON.stringify({ error: "Internal server error" }), { status: 500, headers: CORS_HEADERS });
+      }
+    }
+  },
+  // A new, blank map or world from the map editor (modules/mapcreate.ts), asked for by the game server for an admin
+  "/create-map": {
+    POST: async (req: Request) => {
+      try {
+        const body = await req.json() as CreateMapRequest & { authKey?: string };
+        if (body?.authKey !== authKey) {
+          return new Response(JSON.stringify({ error: "Invalid authentication key" }), { status: 401, headers: CORS_HEADERS });
+        }
+        const mapDir = path.join(getAssetsPath(), "maps");
+        const maps = (await assetCache.get("maps") as any[] | null) ?? [];
+        const taken = (name: string) => maps.some((m: any) => m.name === `${name}.json`) || !!getWorld(name) || fs.existsSync(path.join(mapDir, `${name}.json`)) || fs.existsSync(path.join(mapDir, `${name}.world`));
+        const wrong = checkCreateMap(body, taken, new Set(await tilesetImageNames()));
+        if (wrong) return new Response(JSON.stringify({ error: wrong }), { status: 400, headers: CORS_HEADERS });
+        const request: CreateMapRequest = { name: body.name, kind: body.kind, width: body.width, height: body.height, infinite: body.infinite, tilesets: body.tilesets };
+
+        const known = [...maps.flatMap((m: any) => m.data?.tilesets ?? []), ...listWorlds().flatMap(w => w.manifest?.tilesets ?? [])];
+        const defs = tilesetDefinitions(request.tilesets, known, (file) => {
+          try { return pngSize(fs.readFileSync(path.join(getAssetsPath(), "tilesets", path.basename(file)))); } catch { return null; }
+        });
+        if ("error" in defs) return new Response(JSON.stringify({ error: defs.error }), { status: 400, headers: CORS_HEADERS });
+
+        if (request.kind === "world") {
+          writeBlankWorld(path.join(mapDir, `${request.name}.world`), request, defs.tilesets);
+          await registerNewMap(request.name, addWorld(mapDir, request.name));
+          log.info(`[AssetServer] World ${request.name} created (${request.width} x ${request.height} tiles)`);
+          return new Response(JSON.stringify({ success: true, name: request.name, kind: "world" }), { status: 200, headers: CORS_HEADERS });
+        }
+        const data = blankTiledMap(request, defs.tilesets);
+        const file = path.join(mapDir, `${request.name}.json`);
+        fs.writeFileSync(`${file}.tmp`, JSON.stringify(data));
+        fs.renameSync(`${file}.tmp`, file);
+        await registerNewMap(request.name);
+        log.info(`[AssetServer] Map ${request.name} created (${request.width} x ${request.height} tiles${request.infinite ? ", infinite" : ""})`);
+        return new Response(JSON.stringify({ success: true, name: request.name, kind: "map", data }), { status: 200, headers: CORS_HEADERS });
+      } catch (error: any) {
+        log.error(`Error in /create-map: ${error.message}`);
+        return new Response(JSON.stringify({ error: "Failed to create the map" }), { status: 500, headers: CORS_HEADERS });
+      }
     }
   },
   "/audios": {
@@ -1290,7 +1382,7 @@ Bun.serve({
     }
 
     // API routes should NOT fall back to static file serving
-    const apiRoutes = ["/worldmap", "/icon", "/sprite", "/sprite-sheet-template", "/sprite-sheet-image", "/tileset", "/map-chunk", "/audio", "/audios", "/sprites"];
+    const apiRoutes = ["/worldmap", "/icon", "/sprite", "/sprite-sheet-template", "/sprite-sheet-image", "/tileset", "/map-chunk", "/audio", "/audios", "/sprites", "/tile-sounds", "/tileset-list"];
     if (apiRoutes.includes(url.pathname)) {
       return new Response(JSON.stringify({ error: "Route not found" }), {
         status: 404,

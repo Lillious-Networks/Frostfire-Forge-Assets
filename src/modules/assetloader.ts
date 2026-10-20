@@ -5,8 +5,8 @@ import assetCache from "../services/assetCache";
 import zlib from "zlib";
 import crypto from "crypto";
 import os from "os";
-import { TilesetImages, bakeWorldMap, bakeChunkedWorldMap } from "./worldmap";
-import { loadWorlds, listWorlds, readChunkTiles, type World } from "./worldstore";
+import { ChunkedMapBake, TilesetImages, bakeWorldMap, bakeChunkedWorldMap, type ChunkedMap } from "./worldmap";
+import { loadWorlds, listWorlds, onWorldTilesChanged, readChunkTiles, type World, type WorldTileChange } from "./worldstore";
 
 // Load assets path from environment variable or use default
 function getAssetPath(): string {
@@ -416,7 +416,10 @@ async function loadIcons() {
 // system's temp folder, under a name made of everything it depends on: the world's manifest (which names every
 // pack's content), its tileset images and this bake's version. Nothing is written to the assets folder.
 const WORLD_BAKE_VERSION = 1;
-function bakeWorldCached(world: World, images: TilesetImages): Buffer {
+const worldBakeDir = () => path.join(os.tmpdir(), "frostfire-forge-assets", "worldmaps");
+
+// The kept copy of a world's image: named after everything the image depends on
+function worldBakeFile(world: World): string {
   const key = crypto.createHash("sha256").update(`${WORLD_BAKE_VERSION}:${world.checksum}`);
   for (const tileset of world.manifest.tilesets ?? []) {
     const name = path.basename(String(tileset?.image ?? ""));
@@ -424,14 +427,26 @@ function bakeWorldCached(world: World, images: TilesetImages): Buffer {
     const stat = name && fs.existsSync(file) ? fs.statSync(file) : null;
     key.update(`:${name}:${stat ? `${stat.size}:${Math.floor(stat.mtimeMs)}` : "missing"}`);
   }
-  const dir = path.join(os.tmpdir(), "frostfire-forge-assets", "worldmaps");
-  const prefix = `${world.id}-`;
-  const file = path.join(dir, `${prefix}${key.digest("hex").slice(0, 24)}.png`);
-  try {
-    if (fs.existsSync(file)) return fs.readFileSync(file);
-  } catch { /* unreadable: bake it */ }
+  return path.join(worldBakeDir(), `${world.id}-${key.digest("hex").slice(0, 24)}.png`);
+}
 
-  const { png } = bakeChunkedWorldMap({
+// Keeps a world's image for the next start, in place of the copy of an earlier build. The kept copy is only a
+// shortcut: a failure to write it changes nothing.
+function keepWorldBake(world: World, png: Buffer): void {
+  const prefix = `${world.id}-`, file = worldBakeFile(world);
+  try {
+    fs.mkdirSync(worldBakeDir(), { recursive: true });
+    for (const old of fs.readdirSync(worldBakeDir())) {
+      // an earlier build of this world (the rest of the name is the 24-character key)
+      if (old.startsWith(prefix) && old.length === prefix.length + 28) fs.unlinkSync(path.join(worldBakeDir(), old));
+    }
+    fs.writeFileSync(`${file}.tmp`, png);
+    fs.renameSync(`${file}.tmp`, file);
+  } catch { /* no kept copy */ }
+}
+
+function chunkedMapOf(world: World): ChunkedMap {
+  return {
     width: world.width,
     height: world.height,
     chunkSize: world.chunkSize,
@@ -439,19 +454,82 @@ function bakeWorldCached(world: World, images: TilesetImages): Buffer {
     backgroundcolor: world.manifest.backgroundcolor,
     layers: world.layers,
     readChunk: (chunkX, chunkY) => readChunkTiles(world, chunkX, chunkY),
-  }, images);
+  };
+}
 
-  // The kept copy is only a shortcut: a failure to write it changes nothing
+function bakeWorldCached(world: World, images: TilesetImages): Buffer {
+  const file = worldBakeFile(world);
   try {
-    fs.mkdirSync(dir, { recursive: true });
-    for (const old of fs.readdirSync(dir)) {
-      // an earlier build of this world (the rest of the name is the 24-character key)
-      if (old.startsWith(prefix) && old.length === prefix.length + 28) fs.unlinkSync(path.join(dir, old));
-    }
-    fs.writeFileSync(`${file}.tmp`, png);
-    fs.renameSync(`${file}.tmp`, file);
-  } catch { /* no kept copy */ }
+    if (fs.existsSync(file)) return fs.readFileSync(file);
+  } catch { /* unreadable: bake it */ }
+  const { png } = bakeChunkedWorldMap(chunkedMapOf(world), images);
+  keepWorldBake(world, png);
   return png;
+}
+
+// After a world's tiles changed (an editor save, or a save by another program such as the Tiled extension), its
+// image is baked again: only the changed chunks are drawn, over the image as it was, so a save of a few chunks takes
+// moments even on the 10240 x 10240 continent. Changes that come close together are baked once.
+const worldBakes = new Map<string, ChunkedMapBake>();
+const pendingBakes = new Map<string, { change: WorldTileChange; timer: ReturnType<typeof setTimeout> }>();
+const WORLD_REBAKE_DELAY_MS = 500;
+
+onWorldTilesChanged((world, change) => {
+  const pending = pendingBakes.get(world.id);
+  if (pending) clearTimeout(pending.timer);
+  const merged: WorldTileChange = change === "all" || pending?.change === "all" ? "all" : [...(pending?.change ?? []), ...change];
+  const timer = setTimeout(() => {
+    pendingBakes.delete(world.id);
+    rebakeWorld(world, merged).catch((e: any) => log.warn(`Could not bake the world map of ${world.name} again: ${e?.message ?? e}`));
+  }, WORLD_REBAKE_DELAY_MS);
+  pendingBakes.set(world.id, { change: merged, timer });
+});
+
+export async function rebakeWorld(world: World, change: WorldTileChange): Promise<void> {
+  const now = performance.now();
+  // read the tileset images again: a changed one is picked up here as at start
+  const images = new TilesetImages(path.join(assetPath, TILESETS_PATH));
+  const map = chunkedMapOf(world);
+
+  // Start from the image as it was: kept from the last bake here, or the one being served
+  let bake: ChunkedMapBake | null = null;
+  if (change !== "all") {
+    const kept = worldBakes.get(world.id);
+    try {
+      if (kept) bake = new ChunkedMapBake(map, images, kept.pixels);
+    } catch { bake = null; }
+    if (!bake) {
+      const entry = ((await assetCache.get("worldmaps") as any[] | null) ?? []).find((m: any) => m.name === world.id);
+      if (entry?.data) bake = ChunkedMapBake.fromPng(map, images, Buffer.from(entry.data, "base64"));
+    }
+  }
+  if (!bake) {
+    bake = new ChunkedMapBake(map, images);
+    change = "all";
+  }
+  let drawn = 0;
+  if (change === "all") bake.drawAll();
+  else {
+    const seen = new Set<string>();
+    for (const c of change) {
+      const key = `${c.chunkX},${c.chunkY}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      bake.drawChunk(c.chunkX, c.chunkY);
+      drawn++;
+    }
+  }
+  worldBakes.set(world.id, bake);
+
+  const png = bake.png();
+  const updated = { name: world.id, data: png.toString("base64"), version: crypto.createHash("sha256").update(png).digest("hex").slice(0, 16) };
+  const worldMaps = (await assetCache.get("worldmaps") as any[] | null) ?? [];
+  const index = worldMaps.findIndex((m: any) => m.name === world.id);
+  if (index >= 0) worldMaps[index] = updated;
+  else worldMaps.push(updated);
+  await assetCache.add("worldmaps", worldMaps);
+  keepWorldBake(world, png);
+  log.info(`Baked the world map of ${world.id} again (${change === "all" ? "the whole world" : `${drawn} chunk(s)`}) in ${(performance.now() - now).toFixed(0)}ms`);
 }
 
 async function loadWorldMaps() {
@@ -493,6 +571,30 @@ async function loadWorldMaps() {
   }
   await assetCache.add("worldmaps", worldMaps);
   log.success(`Baked ${baked} world map image(s)${fromFiles ? ` (+${fromFiles} from file)` : ""} in ${(performance.now() - now).toFixed(2)}ms`);
+}
+
+/**
+ * A map just written to the maps folder (modules/mapcreate.ts): a Tiled map "<name>.json", or a world taken in by
+ * worldstore's addWorld first. It joins the maps cache and gets its world map image, as the maps found at start do.
+ */
+export async function registerNewMap(name: string, world?: World): Promise<void> {
+  const images = new TilesetImages(path.join(assetPath, TILESETS_PATH));
+  let png: Buffer | null = null;
+  if (world) {
+    try { png = bakeWorldCached(world, images); } catch (e: any) { log.warn(`Could not bake the world map of ${world.name}: ${e?.message ?? e}`); }
+  } else {
+    const map = processMapFile(`${name}.json`);
+    if (!map) throw new Error(`${name}.json could not be read back`);
+    const maps = (await assetCache.get("maps") as MapData[] | null) ?? [];
+    maps.push(map);
+    await assetCache.add("maps", maps);
+    try { png = bakeWorldMap(map.data, images); } catch (e: any) { log.warn(`Could not bake the world map of ${map.name}: ${e?.message ?? e}`); }
+  }
+  if (png) {
+    const worldMaps = (await assetCache.get("worldmaps") as any[] | null) ?? [];
+    worldMaps.push({ name, data: png.toString("base64"), version: crypto.createHash("sha256").update(png).digest("hex").slice(0, 16) });
+    await assetCache.add("worldmaps", worldMaps);
+  }
 }
 
 function loadAllMaps() {
